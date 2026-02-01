@@ -1,7 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useMemo, useState } from "react";
 import {
   ResponsiveContainer,
   PieChart,
@@ -12,19 +11,17 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
-  Cell,
 } from "recharts";
-
-/* -------------------- Types -------------------- */
 
 type Role = "user" | "assistant";
 
-type ChatMessage = {
-  role: Role;
-  content: string;
-};
+/** Chat items can be normal text bubbles OR an inline card */
+type ChatItem =
+  | { kind: "msg"; role: Role; content: string }
+  | { kind: "card"; card: Card; charts?: ChartsPayload | null };
 
 type CardAction = {
+  id?: string;
   label: string;
   action_name?: string;
   params?: any;
@@ -42,55 +39,38 @@ type ChartsPayload = {
   trend?: { day: string; value: number }[];
 };
 
-type ApiResponse = {
+type OrchestrateResponse = {
   session_id?: string;
-  messages?: ChatMessage[];
+  messages?: { role: Role; content: string }[];
   card?: Card | null;
   debug?: any;
-  ok?: boolean;
 };
 
-/* -------------------- Constants -------------------- */
+type ActionResponse = {
+  ok?: boolean;
+  messages?: { role: Role; content: string }[];
+  card?: Card | null;
+  debug?: any;
+};
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
-const AUTH_KEY = "compass_demo_auth";
-
-// Multi-color palette for pie slices
-const PIE_COLORS = ["#60a5fa", "#34d399", "#fbbf24", "#a78bfa", "#fb7185", "#22d3ee"];
-
-/* -------------------- Helpers -------------------- */
+// ✅ Use env var in prod, fallback to local for dev
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE?.trim() || "http://127.0.0.1:8000";
 
 function bubbleClass(role: Role) {
   if (role === "user") {
-    return "ml-auto bg-blue-600/70 border border-blue-200/10 text-white shadow-[0_12px_30px_rgba(37,99,235,0.18)]";
+    return "ml-auto bg-blue-700/70 border border-blue-400/20 text-white";
   }
-  return "mr-auto bg-white/5 border border-white/10 text-zinc-50 shadow-[0_12px_30px_rgba(0,0,0,0.25)]";
+  return "mr-auto bg-zinc-900/70 border border-white/10 text-zinc-50";
 }
 
-/* -------------------- Page -------------------- */
-
 export default function Home() {
-  const router = useRouter();
+  const [sessionId] = useState("demo-session");
+  const [userId] = useState("ramesh");
 
-  /* ---------- Auth guard ---------- */
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(AUTH_KEY);
-      const auth = raw ? JSON.parse(raw) : null;
-      if (!auth?.loggedIn) router.replace("/login");
-    } catch {
-      router.replace("/login");
-    }
-  }, [router]);
-
-  /* ---------- State ---------- */
-
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "Hi Ramesh — how can I help today?" },
+  const [items, setItems] = useState<ChatItem[]>([
+    { kind: "msg", role: "assistant", content: "Hi Ramesh — how can I help today?" },
   ]);
-
-  const [activeCard, setActiveCard] = useState<Card | null>(null);
-  const [charts, setCharts] = useState<ChartsPayload | null>(null);
 
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -109,12 +89,10 @@ export default function Home() {
     []
   );
 
-  /* ---------- API Calls ---------- */
-
   async function callOrchestrate(text: string) {
     const payload = {
-      session_id: "demo-session",
-      user_id: "ramesh",
+      session_id: sessionId,
+      user_id: userId,
       channel: "web",
       text,
     };
@@ -127,20 +105,24 @@ export default function Home() {
 
     if (!res.ok) {
       const errText = await res.text();
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Error calling API (${res.status}).\n${errText}` },
+      setItems((it) => [
+        ...it,
+        {
+          kind: "msg",
+          role: "assistant",
+          content: `Error calling API (${res.status}).\n${errText}`,
+        },
       ]);
       return null;
     }
 
-    return (await res.json()) as ApiResponse;
+    return (await res.json()) as OrchestrateResponse;
   }
 
   async function callAction(action_name: string, params: any) {
     const payload = {
-      session_id: "demo-session",
-      user_id: "ramesh",
+      session_id: sessionId,
+      user_id: userId,
       action_name,
       params: params ?? {},
     };
@@ -153,44 +135,49 @@ export default function Home() {
 
     if (!res.ok) {
       const errText = await res.text();
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Error calling /action (${res.status}).\n${errText}` },
+      setItems((it) => [
+        ...it,
+        {
+          kind: "msg",
+          role: "assistant",
+          content: `Error calling /action (${res.status}).\n${errText}`,
+        },
       ]);
       return null;
     }
 
-    return (await res.json()) as ApiResponse;
+    return (await res.json()) as ActionResponse;
   }
 
-  /* ---------- Response Handling ---------- */
-
-  function applyApiResponse(data: ApiResponse | null) {
+  /** Append assistant messages + inline card (right after those messages) */
+  function applyApiResponse(data: OrchestrateResponse | ActionResponse | null) {
     if (!data) return;
 
-    // 1) Append assistant messages (avoid duplicates + keep UX clean)
-    if (Array.isArray(data.messages) && data.messages.length > 0) {
-      setMessages((m) => {
-        const assistantsOnly = data.messages!
-          .filter((x) => x && x.role === "assistant")
-          .map((x) => ({ role: "assistant" as const, content: x.content ?? "" }))
-          .filter((x) => x.content.trim().length > 0);
-        return [...m, ...assistantsOnly];
-      });
-    } else {
-      setMessages((m) => [...m, { role: "assistant", content: "No response (demo)." }]);
-    }
+    const assistantMsgs =
+      Array.isArray(data.messages) && data.messages.length > 0
+        ? data.messages
+            .filter((m) => m && m.role === "assistant" && (m.content ?? "").trim().length > 0)
+            .map((m) => ({ kind: "msg" as const, role: "assistant" as const, content: m.content }))
+        : [{ kind: "msg" as const, role: "assistant" as const, content: "No response (demo)." }];
 
-    // 2) Card
-    if (data.card) setActiveCard(data.card);
+    // Charts only come from /orchestrate debug
+    const chartsFromDebug = (data as any)?.debug?.charts as ChartsPayload | undefined;
 
-    // 3) Charts (from debug.charts in /orchestrate)
-    const nextCharts = data.debug?.charts;
-    if (nextCharts) setCharts(nextCharts);
-    else if (data.card?.title !== "Spend Analysis") setCharts(null);
+    setItems((it) => {
+      const next: ChatItem[] = [...it, ...assistantMsgs];
+
+      // ✅ Inline card appears immediately after the assistant message
+      if (data.card) {
+        next.push({
+          kind: "card",
+          card: data.card,
+          charts: chartsFromDebug ?? null,
+        });
+      }
+
+      return next;
+    });
   }
-
-  /* ---------- Actions ---------- */
 
   async function send(text?: string) {
     const t = (text ?? input).trim();
@@ -200,15 +187,15 @@ export default function Home() {
     setInput("");
 
     // show user message immediately
-    setMessages((m) => [...m, { role: "user", content: t }]);
+    setItems((it) => [...it, { kind: "msg", role: "user", content: t }]);
 
     try {
       const data = await callOrchestrate(t);
       applyApiResponse(data);
     } catch (e: any) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `UI error: ${String(e?.message ?? e)}` },
+      setItems((it) => [
+        ...it,
+        { kind: "msg", role: "assistant", content: `UI error: ${String(e?.message ?? e)}` },
       ]);
     } finally {
       setLoading(false);
@@ -216,63 +203,150 @@ export default function Home() {
   }
 
   async function onActionClick(a: CardAction) {
-    if (!a.action_name) return;
+    const actionName = a.action_name;
+    if (!actionName) return;
 
     setLoading(true);
     try {
-      const data = await callAction(a.action_name, a.params);
+      const data = await callAction(actionName, a.params);
       applyApiResponse(data);
     } catch (e: any) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", content: `Action UI error: ${String(e?.message ?? e)}` },
+      setItems((it) => [
+        ...it,
+        { kind: "msg", role: "assistant", content: `Action UI error: ${String(e?.message ?? e)}` },
       ]);
     } finally {
       setLoading(false);
     }
   }
 
-  const isSpendCard = activeCard?.title === "Spend Analysis";
-
-  return (
-    <div className="min-h-screen bg-[#050712] text-white">
-      {/* Premium background glow */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_60%_at_50%_0%,rgba(37,99,235,0.28)_0%,rgba(5,7,18,0)_62%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_55%_at_50%_85%,rgba(0,0,0,0.55)_0%,rgba(0,0,0,0)_60%)]" />
-
-      <div className="relative mx-auto max-w-4xl px-6 py-10">
-        <header className="mb-8 flex items-start justify-between gap-4">
+  /** Inline Card renderer (same look as you had, but inside the chat flow) */
+  function InlineCard({ card, charts }: { card: Card; charts?: ChartsPayload | null }) {
+    return (
+      <div className="mr-auto w-full max-w-[92%] rounded-2xl border border-white/10 bg-black/40 p-5">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-5xl font-semibold tracking-tight font-serif">Compass</h1>
-            <p className="mt-2 text-zinc-300">
-              Your digital banking assistant <span className="opacity-70">(demo)</span>
-            </p>
+            <div className="text-lg font-semibold">{card.title}</div>
+            {card.subtitle ? (
+              <div className="mt-1 text-sm text-zinc-300">{card.subtitle}</div>
+            ) : null}
           </div>
+        </div>
 
-          <button
-            onClick={() => {
-              localStorage.removeItem(AUTH_KEY);
-              window.location.href = "/login";
-            }}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-200 hover:bg-white/10"
-          >
-            Logout
-          </button>
-        </header>
+        {card.body ? (
+          <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/5 p-4 text-sm text-zinc-100">
+            {card.body}
+          </pre>
+        ) : null}
 
-        {/* Device frame */}
-        <div className="mx-auto w-full max-w-3xl rounded-[34px] border border-white/10 bg-white/[0.06] shadow-[0_30px_120px_rgba(0,0,0,0.75)] backdrop-blur-xl">
-          <div className="p-6 sm:p-7">
-            {/* Device notch */}
-            <div className="mb-5 flex items-center justify-center">
-              <div className="h-1.5 w-16 rounded-full bg-white/15" />
+        {/* Spend charts */}
+        {card.title === "Spend Analysis" && charts && (
+          <div className="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2">
+            {/* Pie */}
+            <div className="rounded-2xl border border-white/10 bg-black/50 p-4">
+              <div className="mb-2 text-sm text-zinc-200">Top categories</div>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={charts.pie ?? []}
+                      dataKey="value"
+                      nameKey="name"
+                      outerRadius={80}
+                      label
+                      fill="#60a5fa"
+                      stroke="#0b1220"
+                      strokeWidth={2}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "#0b1220",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        color: "#fff",
+                      }}
+                      labelStyle={{ color: "#fff" }}
+                      itemStyle={{ color: "#fff" }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
             </div>
 
-            {/* Top bar */}
-            <div className="mb-5 flex items-center justify-between">
-              <div className="text-xs tracking-wide text-zinc-300">Compass</div>
+            {/* Trend */}
+            <div className="rounded-2xl border border-white/10 bg-black/50 p-4">
+              <div className="mb-2 text-sm text-zinc-200">Spend trend</div>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={charts.trend ?? []}>
+                    <CartesianGrid stroke="rgba(255,255,255,0.12)" strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="day"
+                      stroke="rgba(255,255,255,0.65)"
+                      tick={{ fill: "rgba(255,255,255,0.75)" }}
+                    />
+                    <YAxis
+                      stroke="rgba(255,255,255,0.65)"
+                      tick={{ fill: "rgba(255,255,255,0.75)" }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: "#0b1220",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        color: "#fff",
+                      }}
+                      labelStyle={{ color: "#fff" }}
+                      itemStyle={{ color: "#fff" }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      stroke="#60a5fa"
+                      strokeWidth={3}
+                      dot={{ r: 3, stroke: "#60a5fa" }}
+                      activeDot={{ r: 5 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        {card.actions && card.actions.length > 0 ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {card.actions.map((a, i) => (
               <button
-                className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-200 hover:bg-white/10 disabled:opacity-50"
+                key={i}
+                className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/15 disabled:opacity-50"
+                onClick={() => onActionClick(a)}
+                disabled={loading}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-black to-black text-white">
+      <div className="mx-auto max-w-4xl px-6 py-10">
+        <header className="mb-8">
+          <h1 className="text-5xl font-semibold tracking-tight">Compass</h1>
+          <p className="mt-2 text-zinc-300">Your digital banking assistant (demo)</p>
+        </header>
+
+        {/* Mobile-ish frame */}
+        <div className="mx-auto w-full max-w-3xl rounded-3xl border border-white/10 bg-white/5 shadow-[0_20px_80px_rgba(0,0,0,0.65)] backdrop-blur-md">
+          <div className="p-6">
+            {/* Top bar */}
+            <div className="mb-6 flex items-center justify-between">
+              <div className="text-sm text-zinc-300">Compass</div>
+              <button
+                className="rounded-full border border-white/15 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
                 onClick={() => send("insights")}
                 disabled={loading}
               >
@@ -280,152 +354,43 @@ export default function Home() {
               </button>
             </div>
 
-            {/* Chat */}
+            {/* Chat (messages + inline cards in correct order) */}
             <div className="space-y-3">
-              {messages.map((m, idx) => (
-                <div
-                  key={idx}
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug ${bubbleClass(
-                    m.role
-                  )}`}
-                >
-                  {m.content}
-                </div>
-              ))}
+              {items.map((it, idx) => {
+                if (it.kind === "msg") {
+                  return (
+                    <div
+                      key={idx}
+                      className={`max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug ${bubbleClass(
+                        it.role
+                      )}`}
+                    >
+                      {it.content}
+                    </div>
+                  );
+                }
+
+                return <InlineCard key={idx} card={it.card} charts={it.charts ?? null} />;
+              })}
             </div>
 
-            {/* Chips */}
-            <div className="mt-5 flex flex-wrap gap-2">
+            {/* Quick chips ALWAYS below chat */}
+            <div className="mt-6 flex flex-wrap gap-2">
               {quickChips.map((c) => (
                 <button
                   key={c}
                   onClick={() => send(c)}
                   disabled={loading}
-                  className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-100 hover:bg-white/10 disabled:opacity-50"
+                  className="rounded-full bg-blue-700/40 px-4 py-2 text-sm text-white hover:bg-blue-700/55 disabled:opacity-50"
                 >
                   {c}
                 </button>
               ))}
             </div>
 
-            {/* Card */}
-            {activeCard && (
-              <div className="mt-5 rounded-2xl border border-white/10 bg-black/30 p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-lg font-semibold text-zinc-50">{activeCard.title}</div>
-                    {activeCard.subtitle ? (
-                      <div className="mt-1 text-sm text-zinc-300">{activeCard.subtitle}</div>
-                    ) : null}
-                  </div>
-                </div>
-
-                {activeCard.body ? (
-                  <pre className="mt-4 whitespace-pre-wrap rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-zinc-100">
-                    {activeCard.body}
-                  </pre>
-                ) : null}
-
-                {/* Spend charts */}
-                {isSpendCard && charts && (
-                  <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-                    {/* Pie */}
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                      <div className="mb-2 text-sm text-zinc-200">Top categories</div>
-                      <div className="h-56 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <PieChart>
-                            <Pie
-                              data={charts.pie ?? []}
-                              dataKey="value"
-                              nameKey="name"
-                              outerRadius={82}
-                              innerRadius={42}
-                              paddingAngle={2}
-                              stroke="#0b1220"
-                              strokeWidth={2}
-                            >
-                              {(charts.pie ?? []).map((_, i) => (
-                                <Cell key={`cell-${i}`} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                              ))}
-                            </Pie>
-                           <Tooltip
-  contentStyle={{
-    background: "#0b1220",
-    border: "1px solid rgba(255,255,255,0.12)",
-    borderRadius: "12px",
-  }}
-  labelStyle={{ color: "#ffffff", fontWeight: 600 }}
-  itemStyle={{ color: "rgba(255,255,255,0.9)" }}
-    cursor={{ fill: "rgba(255,255,255,0.04)" }}
-/>
-
-                          </PieChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-
-                    {/* Trend */}
-                    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                      <div className="mb-2 text-sm text-zinc-200">Spend trend</div>
-                      <div className="h-56 w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={charts.trend ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                            <CartesianGrid stroke="rgba(255,255,255,0.10)" strokeDasharray="3 3" />
-                            <XAxis
-                              dataKey="day"
-                              stroke="rgba(255,255,255,0.60)"
-                              tick={{ fill: "rgba(255,255,255,0.70)" }}
-                            />
-                            <YAxis
-                              stroke="rgba(255,255,255,0.60)"
-                              tick={{ fill: "rgba(255,255,255,0.70)" }}
-                            />
-                            <Tooltip
-                              contentStyle={{
-                                background: "#0b1220",
-                                border: "1px solid rgba(255,255,255,0.12)",
-                                color: "#fff",
-                                borderRadius: "12px",
-                              }}
-                              labelStyle={{ color: "#fff" }}
-                            />
-                            <Line
-                              type="monotone"
-                              dataKey="value"
-                              stroke="#60a5fa"
-                              strokeWidth={3}
-                              dot={{ r: 3, stroke: "#60a5fa", strokeWidth: 2, fill: "#0b1220" }}
-                              activeDot={{ r: 5 }}
-                            />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Actions */}
-                {activeCard.actions && activeCard.actions.length > 0 ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {activeCard.actions.map((a, i) => (
-                      <button
-                        key={i}
-                        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-zinc-100 hover:bg-white/10 disabled:opacity-50"
-                        onClick={() => onActionClick(a)}
-                        disabled={loading}
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            )}
-
             {/* Input */}
             <form
-              className="mt-5 flex items-center gap-3"
+              className="mt-6 flex items-center gap-3"
               onSubmit={(e) => {
                 e.preventDefault();
                 send();
@@ -435,12 +400,12 @@ export default function Home() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Type or ask me something"
-                className="w-full rounded-2xl border border-white/10 bg-black/25 px-4 py-4 text-white outline-none placeholder:text-zinc-400 focus:border-blue-500/60"
+                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-4 text-white outline-none placeholder:text-zinc-400 focus:border-blue-500/60"
               />
               <button
                 type="submit"
                 disabled={loading}
-                className="rounded-2xl bg-blue-600 px-6 py-4 font-medium hover:bg-blue-500 disabled:opacity-50 shadow-[0_12px_30px_rgba(37,99,235,0.25)]"
+                className="rounded-2xl bg-blue-700 px-6 py-4 font-medium hover:bg-blue-600 disabled:opacity-50"
               >
                 {loading ? "..." : "Send"}
               </button>
