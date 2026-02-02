@@ -152,7 +152,7 @@ export default function Home() {
       "spend analysis",
       "recurring charges",
       "account summary",
-      "transfer $25 from savings to checking",
+      "transfer funds",
       "upcoming travel",
       "cd maturity alert",
       "talk to an agent",
@@ -171,7 +171,7 @@ export default function Home() {
       user_id: userId,
       channel: "web",
       text,
-    };
+    }; 
 
     const res = await fetch(`${API_BASE}/orchestrate`, {
       method: "POST",
