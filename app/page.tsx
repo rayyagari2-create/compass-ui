@@ -42,9 +42,9 @@ type ChartsPayload = {
 
 type AgentTraceStep = {
   stage: "Planner" | "Delegate" | "Act" | string;
-  agent?: string; 
-  tool?: string; 
-  reasoning?: string; 
+  agent?: string;
+  tool?: string;
+  reasoning?: string;
   decision?: string;
   result?: string;
 };
@@ -70,6 +70,12 @@ type Turn = {
   card?: Card | null;
   charts?: ChartsPayload | null;
   trace?: AgentTraceStep[] | null;
+};
+
+type InsightItem = {
+  id: string;
+  title: string;
+  subtitle?: string;
 };
 
 const API_BASE =
@@ -152,12 +158,61 @@ function DarkTooltip({ active, payload, label }: any) {
 
 function stagePill(stage: string) {
   const s = (stage || "").toLowerCase();
-  if (s.includes("plan")) return "bg-blue-500/15 border-blue-400/20 text-blue-200";
+  if (s.includes("plan"))
+    return "bg-blue-500/15 border-blue-400/20 text-blue-200";
   if (s.includes("deleg"))
     return "bg-emerald-500/15 border-emerald-400/20 text-emerald-200";
   if (s.includes("act"))
     return "bg-violet-500/15 border-violet-400/20 text-violet-200";
   return "bg-white/10 border-white/10 text-white/80";
+}
+
+function isTravelCard(card?: Card | null) {
+  return (card?.title || "").toLowerCase().trim() === "travel";
+}
+
+/**
+ * Travel "eye-catcher":
+ * - If the backend returns a Travel card body as plain text, we parse a few fields
+ *   and render a colorful itinerary block above the raw <pre>.
+ */
+function parseTravel(body?: string) {
+  const text = (body || "").toString();
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const get = (prefix: string) => {
+    const ln = lines.find((l) => l.toLowerCase().startsWith(prefix.toLowerCase()));
+    if (!ln) return "";
+    return ln.slice(prefix.length).trim();
+  };
+
+  // Try to capture common fields from your new main.py Travel body
+  const destination = get("Destination:");
+  const dates = get("Dates:");
+  const flight = get("Flight:");
+  const depart = get("Depart:");
+  const ret = get("Return:");
+  const hotel = get("Hotel:");
+  const address = get("Address:");
+  const checkin = get("Check-in:");
+  const confirmation = get("Confirmation:");
+  const points = get("Travel points:");
+
+  return {
+    destination,
+    dates,
+    flight,
+    depart,
+    ret,
+    hotel,
+    address,
+    checkin,
+    confirmation,
+    points,
+  };
 }
 
 export default function Home() {
@@ -168,21 +223,32 @@ export default function Home() {
     { id: "t0", userText: "", assistantText: "Hi Ramesh — how can I help today?" },
   ]);
 
-  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>({});
+  // ✅ Agentic Trace collapsed by default: DO NOT auto-open on new turns
+  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>(
+    {}
+  );
+
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  // ✅ Insights dropdown state
+  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [insights, setInsights] = useState<InsightItem[]>([]);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
+  // ✅ Updated chip names:
+  // 1) "cd maturity alert" -> "manage cd"
+  // 2) "upcoming travel" -> "travel"
   const quickChips = useMemo(
     () => [
-      "insights",
       "spend analysis",
       "recurring charges",
       "account summary",
       "transfer funds",
-      "upcoming travel",
-      "cd maturity alert",
+      "travel",
+      "manage cd",
       "talk to an agent",
     ],
     []
@@ -252,10 +318,9 @@ export default function Home() {
     return null;
   }
 
-    function extractTraceIfAny(data: OrchestrateResponse | ActionResponse) {
+  function extractTraceIfAny(data: OrchestrateResponse | ActionResponse) {
     const dbg = (data as any)?.debug;
 
-    
     const at = dbg?.agent_trace as
       | {
           planner?: { decision?: string; reason?: string };
@@ -280,7 +345,7 @@ export default function Home() {
         steps.push({
           stage: "Delegate",
           agent: stripDemo(at.delegate.agent || "Router"),
-          tool: stripDemo(at.delegate.capability), // capability label
+          tool: stripDemo(at.delegate.capability),
           decision: at.delegate.capability
             ? stripDemo(`Route to ${at.delegate.capability}`)
             : undefined,
@@ -301,13 +366,11 @@ export default function Home() {
       return steps.length ? steps : null;
     }
 
-    // 2) Back-compat: if backend returns an array later
     const traceArray =
       (dbg?.trace as AgentTraceStep[] | undefined) ||
       ((data as any)?.trace as AgentTraceStep[] | undefined);
 
     if (Array.isArray(traceArray) && traceArray.length > 0) {
-      // sanitize strings inside
       return traceArray.map((s) => ({
         ...s,
         stage: stripDemo(s.stage),
@@ -338,6 +401,38 @@ export default function Home() {
     };
   }
 
+  // ✅ Fetch insights list WITHOUT polluting the chat
+  async function refreshInsights() {
+    setInsightsLoading(true);
+    try {
+      const data = await callOrchestrate("insights");
+      const list = ((data as any)?.debug?.insights ?? []) as InsightItem[];
+      if (Array.isArray(list)) {
+        setInsights(
+          list
+            .filter(
+              (x) =>
+                x && typeof x.id === "string" && typeof x.title === "string"
+            )
+            .map((x) => ({
+              id: stripDemo(x.id),
+              title: stripDemo(x.title),
+              subtitle: stripDemo(x.subtitle),
+            }))
+        );
+      }
+    } catch {
+      setInsights([]);
+    } finally {
+      setInsightsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refreshInsights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function send(text?: string) {
     const tRaw = (text ?? input).trim();
     if (!tRaw || loading) return;
@@ -365,9 +460,8 @@ export default function Home() {
         )
       );
 
-      if (trace?.length) {
-        setExpandedTrace((m) => ({ ...m, [turnId]: true }));
-      }
+      // ✅ do NOT auto-expand trace (collapsed by default)
+      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
     } catch (e: any) {
       setTurns((prev) =>
         prev.map((x) =>
@@ -405,9 +499,8 @@ export default function Home() {
         )
       );
 
-      if (trace?.length) {
-        setExpandedTrace((m) => ({ ...m, [turnId]: true }));
-      }
+      // ✅ do NOT auto-expand trace (collapsed by default)
+      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
     } catch (e: any) {
       setTurns((prev) =>
         prev.map((x) =>
@@ -420,6 +513,49 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  // ✅ Open insight within app (no link-out)
+  async function openInsight(insightId: string) {
+    if (!insightId || loading) return;
+
+    setInsightsOpen(false);
+    setLoading(true);
+
+    const turnId = `t-${Date.now()}-insight`;
+    setTurns((prev) => [
+      ...prev,
+      { id: turnId, userText: "", assistantText: "…" },
+    ]);
+
+    try {
+      const data = await callAction("insight_view", { insight_id: insightId });
+      const assistantText = extractAssistantText(data);
+      const card = sanitizeCard(data.card ?? null);
+      const charts = extractChartsIfAny(data, card);
+      const trace = extractTraceIfAny(data);
+
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+        )
+      );
+
+      // ✅ do NOT auto-expand trace (collapsed by default)
+      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
+    } catch (e: any) {
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId
+            ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` }
+            : x
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const insightsCount = insightsLoading ? "…" : String(insights.length);
 
   return (
     <div className="min-h-screen text-white">
@@ -446,9 +582,15 @@ export default function Home() {
             className="rounded-full border border-white/12 bg-white/5 px-5 py-2 text-sm text-white/85 shadow-[0_20px_80px_rgba(0,0,0,0.35)] hover:bg-white/10"
             onClick={() => {
               setTurns([
-                { id: "t0", userText: "", assistantText: "Hi Ramesh — how can I help today?" },
+                {
+                  id: "t0",
+                  userText: "",
+                  assistantText: "Hi Ramesh — how can I help today?",
+                },
               ]);
               setExpandedTrace({});
+              setInsightsOpen(false);
+              refreshInsights();
             }}
           >
             Logout
@@ -465,13 +607,79 @@ export default function Home() {
               {/* top bar */}
               <div className="mb-6 flex items-center justify-between">
                 <div className="text-sm text-white/70">Compass</div>
-                <button
-                  className="rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
-                  onClick={() => send("insights")}
-                  disabled={loading}
-                >
-                  Insights
-                </button>
+
+                {/* Insights button + count badge */}
+                <div className="relative">
+                  <button
+                    className="relative rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
+                    onClick={async () => {
+                      await refreshInsights();
+                      setInsightsOpen((v) => !v);
+                    }}
+                    disabled={loading}
+                  >
+                    Insights
+                    <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/85">
+                      {insightsCount}
+                    </span>
+                  </button>
+
+                  {insightsOpen ? (
+                    <div className="absolute right-0 z-20 mt-3 w-[360px] rounded-2xl border border-white/10 bg-black/55 p-3 shadow-[0_18px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl">
+                      <div className="mb-2 flex items-center justify-between px-2">
+                        <div className="text-sm font-semibold text-white/90">
+                          Insights
+                        </div>
+                        <button
+                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/75 hover:bg-white/10"
+                          onClick={() => setInsightsOpen(false)}
+                        >
+                          Close
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {insightsLoading ? (
+                          <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
+                            Loading…
+                          </div>
+                        ) : insights.length === 0 ? (
+                          <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
+                            No insights available.
+                          </div>
+                        ) : (
+                          insights.map((it) => (
+                            <div
+                              key={it.id}
+                              className="rounded-2xl border border-white/10 bg-white/5 p-3"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-sm font-semibold text-white/90">
+                                    {stripDemo(it.title)}
+                                  </div>
+                                  {it.subtitle ? (
+                                    <div className="mt-1 text-xs text-white/60">
+                                      {stripDemo(it.subtitle)}
+                                    </div>
+                                  ) : null}
+                                </div>
+
+                                <button
+                                  className="shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs text-white/85 hover:bg-white/15 disabled:opacity-50"
+                                  disabled={loading}
+                                  onClick={() => openInsight(it.id)}
+                                >
+                                  View
+                                </button>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               {/* Chat area */}
@@ -479,6 +687,10 @@ export default function Home() {
                 {turns.map((t) => {
                   const showUser = t.userText.trim().length > 0;
                   const traceOpen = !!expandedTrace[t.id];
+
+                  const travel = isTravelCard(t.card)
+                    ? parseTravel(t.card?.body)
+                    : null;
 
                   return (
                     <div key={t.id} className="space-y-3">
@@ -506,22 +718,28 @@ export default function Home() {
                         </div>
                       ) : null}
 
-                      {/* Agentic Trace */}
+                      {/* Agentic Trace (collapsed by default) */}
                       {t.trace && t.trace.length > 0 ? (
                         <div className="max-w-[92%]">
                           <button
                             onClick={() =>
-                              setExpandedTrace((m) => ({ ...m, [t.id]: !traceOpen }))
+                              setExpandedTrace((m) => ({
+                                ...m,
+                                [t.id]: !traceOpen,
+                              }))
                             }
                             className="rounded-xl border border-white/10 bg-white/6 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
                           >
-                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner → Delegate → Act)
+                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner →
+                            Delegate → Act)
                           </button>
 
                           {traceOpen ? (
                             <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
-                              <div className="mb-3 text-xs text-white/60">Trace</div>
-                                
+                              <div className="mb-3 text-xs text-white/60">
+                                Trace
+                              </div>
+
                               <div className="space-y-3">
                                 {t.trace.map((step, idx) => (
                                   <div
@@ -559,21 +777,27 @@ export default function Home() {
 
                                     {step.reasoning ? (
                                       <div className="mt-2 text-sm text-white/80">
-                                        <span className="text-white/55">Why:</span>{" "}
+                                        <span className="text-white/55">
+                                          Why:
+                                        </span>{" "}
                                         {stripDemo(step.reasoning)}
                                       </div>
                                     ) : null}
 
                                     {step.decision ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">Decision:</span>{" "}
+                                        <span className="text-white/55">
+                                          Decision:
+                                        </span>{" "}
                                         {stripDemo(step.decision)}
                                       </div>
                                     ) : null}
 
                                     {step.result ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">Result:</span>{" "}
+                                        <span className="text-white/55">
+                                          Result:
+                                        </span>{" "}
                                         {stripDemo(step.result)}
                                       </div>
                                     ) : null}
@@ -601,11 +825,112 @@ export default function Home() {
                             </div>
                           </div>
 
-                          {t.card.body ? (
-                            <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
-                              {stripDemo(t.card.body)}
-                            </pre>
+                          {/* ✅ Travel eye-catcher */}
+                          {travel ? (
+                            <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/15 via-sky-500/10 to-fuchsia-500/10">
+                              <div className="p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
+                                      ✈️ Flight
+                                    </span>
+                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
+                                      🏨 Hotel
+                                    </span>
+                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
+                                      🎉 Trip
+                                    </span>
+                                  </div>
+                                  {travel.points ? (
+                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
+                                      ⭐ {stripDemo(travel.points)}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                    <div className="text-xs text-white/60">
+                                      Destination
+                                    </div>
+                                    <div className="mt-1 text-base font-semibold text-white/90">
+                                      {stripDemo(travel.destination || "—")}
+                                    </div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Dates
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.dates || "—")}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                    <div className="text-xs text-white/60">
+                                      Flight
+                                    </div>
+                                    <div className="mt-1 text-sm font-semibold text-white/90">
+                                      {stripDemo(travel.flight || "—")}
+                                    </div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Depart
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.depart || "—")}
+                                    </div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Return
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.ret || "—")}
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4 md:col-span-2">
+                                    <div className="flex flex-wrap items-start justify-between gap-3">
+                                      <div>
+                                        <div className="text-xs text-white/60">
+                                          Hotel
+                                        </div>
+                                        <div className="mt-1 text-sm font-semibold text-white/90">
+                                          {stripDemo(travel.hotel || "—")}
+                                        </div>
+                                        {travel.address ? (
+                                          <div className="mt-1 text-xs text-white/70">
+                                            📍 {stripDemo(travel.address)}
+                                          </div>
+                                        ) : null}
+                                      </div>
+
+                                      <div className="text-right">
+                                        {travel.checkin ? (
+                                          <div className="text-xs text-white/70">
+                                            🕒 {stripDemo(travel.checkin)}
+                                          </div>
+                                        ) : null}
+                                        {travel.confirmation ? (
+                                          <div className="mt-1 inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
+                                            ✅ {stripDemo(travel.confirmation)}
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div className="mt-3 text-xs text-white/55">
+                                  
+                                </div>
+                              </div>
+                            </div>
                           ) : null}
+                          
+                          {/* Raw body — hide for Travel since we render a custom layout */}
+{t.card.body && !isTravelCard(t.card) ? (
+  <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
+    {stripDemo(t.card.body)}
+  </pre>
+) : null}
+
 
                           {/* spend charts */}
                           {t.card.title === "Spend Analysis" && t.charts ? (
@@ -654,11 +979,15 @@ export default function Home() {
                                       <XAxis
                                         dataKey="day"
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
+                                        tick={{
+                                          fill: "rgba(255,255,255,0.70)",
+                                        }}
                                       />
                                       <YAxis
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
+                                        tick={{
+                                          fill: "rgba(255,255,255,0.70)",
+                                        }}
                                       />
                                       <Tooltip content={<DarkTooltip />} />
                                       <Line
@@ -741,7 +1070,9 @@ export default function Home() {
                 </button>
               </form>
 
-              <div className="mt-2 text-xs text-white/45">Tip: Press Enter to send.</div>
+              <div className="mt-2 text-xs text-white/45">
+                Tip: Press Enter to send.
+              </div>
             </div>
           </div>
 
