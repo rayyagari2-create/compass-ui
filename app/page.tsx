@@ -63,6 +63,12 @@ type ActionResponse = {
   debug?: any;
 };
 
+type InsightItem = {
+  id: string;
+  title: string;
+  subtitle?: string;
+};
+
 type Turn = {
   id: string;
   userText: string;
@@ -71,14 +77,8 @@ type Turn = {
   charts?: ChartsPayload | null;
   trace?: AgentTraceStep[] | null;
 
-  // ✅ NEW: allow a turn to render an insights list in-chat
+  // ✅ allow a turn to render an insights list in-chat
   insightsList?: InsightItem[] | null;
-};
-
-type InsightItem = {
-  id: string;
-  title: string;
-  subtitle?: string;
 };
 
 const API_BASE =
@@ -161,7 +161,8 @@ function DarkTooltip({ active, payload, label }: any) {
 
 function stagePill(stage: string) {
   const s = (stage || "").toLowerCase();
-  if (s.includes("plan")) return "bg-blue-500/15 border-blue-400/20 text-blue-200";
+  if (s.includes("plan"))
+    return "bg-blue-500/15 border-blue-400/20 text-blue-200";
   if (s.includes("deleg"))
     return "bg-emerald-500/15 border-emerald-400/20 text-emerald-200";
   if (s.includes("act"))
@@ -181,7 +182,9 @@ function parseTravel(body?: string) {
     .filter(Boolean);
 
   const get = (prefix: string) => {
-    const ln = lines.find((l) => l.toLowerCase().startsWith(prefix.toLowerCase()));
+    const ln = lines.find((l) =>
+      l.toLowerCase().startsWith(prefix.toLowerCase())
+    );
     if (!ln) return "";
     return ln.slice(prefix.length).trim();
   };
@@ -200,27 +203,40 @@ function parseTravel(body?: string) {
   };
 }
 
+// ✅ Hide “Opening X…” acknowledgements on insight clicks
+function shouldHideInsightAck(msg: string, card?: Card | null) {
+  const t = (msg || "").toLowerCase().trim();
+  if (t.startsWith("opening ")) return true;
+  if (t === "opening.") return true;
+  // If backend returns an Insights card, don’t also show a generic bubble
+  if ((card?.title || "").toLowerCase().trim() === "insights") return true;
+  return false;
+}
+
 export default function Home() {
   const [sessionId] = useState("demo-session");
   const [userId] = useState("ramesh");
 
   const [turns, setTurns] = useState<Turn[]>([
-  {
-    id: "t0",
-    userText: "",
-    assistantText:
-      "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
-  },
-]);
+    {
+      id: "t0",
+      userText: "",
+      assistantText:
+        "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
+    },
+  ]);
 
+  // Trace collapsed by default
+  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>(
+    {}
+  );
 
-  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Insights state (still keep it for badge count)
+  // Insights state (for badge + in-chat list)
   const [insights, setInsights] = useState<InsightItem[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
 
@@ -242,7 +258,12 @@ export default function Home() {
   }, [turns.length, loading]);
 
   async function callOrchestrate(text: string) {
-    const payload = { session_id: sessionId, user_id: userId, channel: "web", text };
+    const payload = {
+      session_id: sessionId,
+      user_id: userId,
+      channel: "web",
+      text,
+    };
 
     const res = await fetch(`${API_BASE}/orchestrate`, {
       method: "POST",
@@ -258,7 +279,12 @@ export default function Home() {
   }
 
   async function callAction(action_name: string, params: any) {
-    const payload = { session_id: sessionId, user_id: userId, action_name, params: params ?? {} };
+    const payload = {
+      session_id: sessionId,
+      user_id: userId,
+      action_name,
+      params: params ?? {},
+    };
 
     const res = await fetch(`${API_BASE}/action`, {
       method: "POST",
@@ -275,12 +301,17 @@ export default function Home() {
 
   function extractAssistantText(data: OrchestrateResponse | ActionResponse) {
     const msgs = Array.isArray(data.messages) ? data.messages : [];
-    const first = msgs.find((m) => m?.role === "assistant" && (m.content ?? "").trim());
+    const first = msgs.find(
+      (m) => m?.role === "assistant" && (m.content ?? "").trim()
+    );
     if (first) return stripDemo(first.content.trim());
     return "No response.";
   }
 
-  function extractChartsIfAny(data: OrchestrateResponse | ActionResponse, card?: Card | null) {
+  function extractChartsIfAny(
+    data: OrchestrateResponse | ActionResponse,
+    card?: Card | null
+  ) {
     const charts = (data as any)?.debug?.charts as ChartsPayload | undefined;
     if (card?.title === "Spend Analysis" && charts) return charts;
     return null;
@@ -314,7 +345,9 @@ export default function Home() {
           stage: "Delegate",
           agent: stripDemo(at.delegate.agent || "Router"),
           tool: stripDemo(at.delegate.capability),
-          decision: at.delegate.capability ? stripDemo(`Route to ${at.delegate.capability}`) : undefined,
+          decision: at.delegate.capability
+            ? stripDemo(`Route to ${at.delegate.capability}`)
+            : undefined,
         });
       }
 
@@ -323,7 +356,9 @@ export default function Home() {
           stage: "Act",
           agent: "Executor",
           result: stripDemo(at.act.result),
-          reasoning: at.act.confidence ? stripDemo(`Confidence: ${at.act.confidence}`) : undefined,
+          reasoning: at.act.confidence
+            ? stripDemo(`Confidence: ${at.act.confidence}`)
+            : undefined,
         });
       }
 
@@ -369,7 +404,9 @@ export default function Home() {
       const list = ((data as any)?.debug?.insights ?? []) as InsightItem[];
       if (Array.isArray(list)) {
         const cleaned = list
-          .filter((x) => x && typeof x.id === "string" && typeof x.title === "string")
+          .filter(
+            (x) => x && typeof x.id === "string" && typeof x.title === "string"
+          )
           .map((x) => ({
             id: stripDemo(x.id),
             title: stripDemo(x.title),
@@ -393,21 +430,20 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ NEW: show insights in-chat (no overlay)
+  // ✅ show insights in-chat (no overlay)
   async function showInsightsInChat() {
     if (loading) return;
     setLoading(true);
 
     const turnId = `t-${Date.now()}-insights`;
 
-    // add placeholder assistant turn
     setTurns((prev) => [
       ...prev,
       {
         id: turnId,
         userText: "",
         assistantText: "Here are your latest insights.",
-        card: { title: "Insights", subtitle: "Tap an insight to view details", body: "" },
+        card: { title: "Insights", subtitle: "Tap an insight to view details" },
         insightsList: [],
       },
     ]);
@@ -439,7 +475,10 @@ export default function Home() {
     setInput("");
 
     const turnId = `t-${Date.now()}`;
-    setTurns((prev) => [...prev, { id: turnId, userText: stripDemo(tRaw), assistantText: "…" }]);
+    setTurns((prev) => [
+      ...prev,
+      { id: turnId, userText: stripDemo(tRaw), assistantText: "…" },
+    ]);
 
     try {
       const data = await callOrchestrate(tRaw);
@@ -448,12 +487,22 @@ export default function Home() {
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+        )
+      );
     } catch (e: any) {
       setTurns((prev) =>
         prev.map((x) =>
           x.id === turnId
-            ? { ...x, assistantText: `UI error: ${String(e?.message ?? e)}`, card: null, charts: null, trace: null }
+            ? {
+                ...x,
+                assistantText: `UI error: ${String(e?.message ?? e)}`,
+                card: null,
+                charts: null,
+                trace: null,
+              }
             : x
         )
       );
@@ -474,10 +523,21 @@ export default function Home() {
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+        )
+      );
     } catch (e: any) {
       setTurns((prev) =>
-        prev.map((x) => (x.id === turnId ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` } : x))
+        prev.map((x) =>
+          x.id === turnId
+            ? {
+                ...x,
+                assistantText: `Action error: ${String(e?.message ?? e)}`,
+              }
+            : x
+        )
       );
     } finally {
       setLoading(false);
@@ -490,19 +550,35 @@ export default function Home() {
     setLoading(true);
 
     const turnId = `t-${Date.now()}-insight`;
-    setTurns((prev) => [...prev, { id: turnId, userText: "", assistantText: "…" }]);
+    setTurns((prev) => [
+      ...prev,
+      { id: turnId, userText: "", assistantText: "…" },
+    ]);
 
     try {
       const data = await callAction("insight_view", { insight_id: insightId });
-      const assistantText = extractAssistantText(data);
+
       const card = sanitizeCard(data.card ?? null);
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
+      let assistantText = extractAssistantText(data);
+      if (shouldHideInsightAck(assistantText, card)) {
+        assistantText = "";
+      }
+
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+        )
+      );
     } catch (e: any) {
       setTurns((prev) =>
-        prev.map((x) => (x.id === turnId ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` } : x))
+        prev.map((x) =>
+          x.id === turnId
+            ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` }
+            : x
+        )
       );
     } finally {
       setLoading(false);
@@ -523,15 +599,26 @@ export default function Home() {
         <header className="mb-8 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-6xl font-semibold tracking-tight">
-              <span className="drop-shadow-[0_16px_60px_rgba(0,0,0,0.6)]">Compass</span>
+              <span className="drop-shadow-[0_16px_60px_rgba(0,0,0,0.6)]">
+                Compass
+              </span>
             </h1>
-            <p className="mt-2 text-white/70">{stripDemo("Your digital banking assistant (demo)")}</p>
+            <p className="mt-2 text-white/70">
+              {stripDemo("Your digital banking assistant (demo)")}
+            </p>
           </div>
 
           <button
             className="rounded-full border border-white/12 bg-white/5 px-5 py-2 text-sm text-white/85 shadow-[0_20px_80px_rgba(0,0,0,0.35)] hover:bg-white/10"
             onClick={() => {
-              setTurns([{ id: "t0", userText: "", assistantText: "Hi Ramesh — how can I help today?" }]);
+              setTurns([
+                {
+                  id: "t0",
+                  userText: "",
+                  assistantText:
+                    "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
+                },
+              ]);
               setExpandedTrace({});
               refreshInsights();
             }}
@@ -551,7 +638,7 @@ export default function Home() {
               <div className="mb-6 flex items-center justify-between">
                 <div className="text-sm text-white/70">Compass</div>
 
-                {/* ✅ Insights button now injects Insights into chat */}
+                {/* ✅ Insights button injects insights into chat */}
                 <button
                   className="relative rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
                   onClick={showInsightsInChat}
@@ -569,18 +656,30 @@ export default function Home() {
                 {turns.map((t) => {
                   const showUser = t.userText.trim().length > 0;
                   const traceOpen = !!expandedTrace[t.id];
-                  const travel = isTravelCard(t.card) ? parseTravel(t.card?.body) : null;
+                  const travel = isTravelCard(t.card)
+                    ? parseTravel(t.card?.body)
+                    : null;
 
                   return (
                     <div key={t.id} className="space-y-3">
                       {showUser ? (
-                        <div className={clsx("max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug", bubbleClass("user"))}>
+                        <div
+                          className={clsx(
+                            "max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug",
+                            bubbleClass("user")
+                          )}
+                        >
                           {stripDemo(t.userText)}
                         </div>
                       ) : null}
 
                       {t.assistantText ? (
-                        <div className={clsx("max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug", bubbleClass("assistant"))}>
+                        <div
+                          className={clsx(
+                            "max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug",
+                            bubbleClass("assistant")
+                          )}
+                        >
                           {stripDemo(t.assistantText)}
                         </div>
                       ) : null}
@@ -589,18 +688,29 @@ export default function Home() {
                       {t.trace && t.trace.length > 0 ? (
                         <div className="max-w-[92%]">
                           <button
-                            onClick={() => setExpandedTrace((m) => ({ ...m, [t.id]: !traceOpen }))}
+                            onClick={() =>
+                              setExpandedTrace((m) => ({
+                                ...m,
+                                [t.id]: !traceOpen,
+                              }))
+                            }
                             className="rounded-xl border border-white/10 bg-white/6 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
                           >
-                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner → Delegate → Act)
+                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner
+                            → Delegate → Act)
                           </button>
 
                           {traceOpen ? (
                             <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
-                              <div className="mb-3 text-xs text-white/60">Trace</div>
+                              <div className="mb-3 text-xs text-white/60">
+                                Trace
+                              </div>
                               <div className="space-y-3">
                                 {t.trace.map((step, idx) => (
-                                  <div key={idx} className="rounded-xl border border-white/10 bg-black/35 p-3">
+                                  <div
+                                    key={idx}
+                                    className="rounded-xl border border-white/10 bg-black/35 p-3"
+                                  >
                                     <div className="flex flex-wrap items-center gap-2">
                                       <span
                                         className={clsx(
@@ -613,32 +723,47 @@ export default function Home() {
 
                                       {step.agent ? (
                                         <span className="text-[11px] text-white/70">
-                                          Agent: <span className="text-white/90">{stripDemo(step.agent)}</span>
+                                          Agent:{" "}
+                                          <span className="text-white/90">
+                                            {stripDemo(step.agent)}
+                                          </span>
                                         </span>
                                       ) : null}
 
                                       {step.tool ? (
                                         <span className="text-[11px] text-white/70">
-                                          Capability: <span className="text-white/90">{stripDemo(step.tool)}</span>
+                                          Capability:{" "}
+                                          <span className="text-white/90">
+                                            {stripDemo(step.tool)}
+                                          </span>
                                         </span>
                                       ) : null}
                                     </div>
 
                                     {step.reasoning ? (
                                       <div className="mt-2 text-sm text-white/80">
-                                        <span className="text-white/55">Why:</span> {stripDemo(step.reasoning)}
+                                        <span className="text-white/55">
+                                          Why:
+                                        </span>{" "}
+                                        {stripDemo(step.reasoning)}
                                       </div>
                                     ) : null}
 
                                     {step.decision ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">Decision:</span> {stripDemo(step.decision)}
+                                        <span className="text-white/55">
+                                          Decision:
+                                        </span>{" "}
+                                        {stripDemo(step.decision)}
                                       </div>
                                     ) : null}
 
                                     {step.result ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">Result:</span> {stripDemo(step.result)}
+                                        <span className="text-white/55">
+                                          Result:
+                                        </span>{" "}
+                                        {stripDemo(step.result)}
                                       </div>
                                     ) : null}
                                   </div>
@@ -654,9 +779,13 @@ export default function Home() {
                         <div className="mt-2 rounded-2xl border border-white/10 bg-black/35 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
                           <div className="flex items-start justify-between gap-4">
                             <div>
-                              <div className="text-lg font-semibold text-white/95">{stripDemo(t.card.title)}</div>
+                              <div className="text-lg font-semibold text-white/95">
+                                {stripDemo(t.card.title)}
+                              </div>
                               {t.card.subtitle ? (
-                                <div className="mt-1 text-sm text-white/65">{stripDemo(t.card.subtitle)}</div>
+                                <div className="mt-1 text-sm text-white/65">
+                                  {stripDemo(t.card.subtitle)}
+                                </div>
                               ) : null}
                             </div>
                           </div>
@@ -665,12 +794,19 @@ export default function Home() {
                           {t.insightsList && t.insightsList.length > 0 ? (
                             <div className="mt-4 space-y-2">
                               {t.insightsList.map((it) => (
-                                <div key={it.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                                <div
+                                  key={it.id}
+                                  className="rounded-2xl border border-white/10 bg-white/5 p-3"
+                                >
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
-                                      <div className="text-sm font-semibold text-white/90">{stripDemo(it.title)}</div>
+                                      <div className="text-sm font-semibold text-white/90">
+                                        {stripDemo(it.title)}
+                                      </div>
                                       {it.subtitle ? (
-                                        <div className="mt-1 text-xs text-white/60">{stripDemo(it.subtitle)}</div>
+                                        <div className="mt-1 text-xs text-white/60">
+                                          {stripDemo(it.subtitle)}
+                                        </div>
                                       ) : null}
                                     </div>
                                     <button
@@ -711,43 +847,65 @@ export default function Home() {
 
                                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">Destination</div>
+                                    <div className="text-xs text-white/60">
+                                      Destination
+                                    </div>
                                     <div className="mt-1 text-base font-semibold text-white/90">
                                       {stripDemo(travel.destination || "—")}
                                     </div>
 
-                                    <div className="mt-2 text-xs text-white/60">Dates</div>
-                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.dates || "—")}</div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Dates
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.dates || "—")}
+                                    </div>
                                   </div>
 
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">Flight</div>
+                                    <div className="text-xs text-white/60">
+                                      Flight
+                                    </div>
                                     <div className="mt-1 text-sm font-semibold text-white/90">
                                       {stripDemo(travel.flight || "—")}
                                     </div>
 
-                                    <div className="mt-2 text-xs text-white/60">Depart</div>
-                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.depart || "—")}</div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Depart
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.depart || "—")}
+                                    </div>
 
-                                    <div className="mt-2 text-xs text-white/60">Return</div>
-                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.ret || "—")}</div>
+                                    <div className="mt-2 text-xs text-white/60">
+                                      Return
+                                    </div>
+                                    <div className="mt-1 text-sm text-white/85">
+                                      {stripDemo(travel.ret || "—")}
+                                    </div>
                                   </div>
 
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4 md:col-span-2">
                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                       <div>
-                                        <div className="text-xs text-white/60">Hotel</div>
+                                        <div className="text-xs text-white/60">
+                                          Hotel
+                                        </div>
                                         <div className="mt-1 text-sm font-semibold text-white/90">
                                           {stripDemo(travel.hotel || "—")}
                                         </div>
                                         {travel.address ? (
-                                          <div className="mt-1 text-xs text-white/70">📍 {stripDemo(travel.address)}</div>
+                                          <div className="mt-1 text-xs text-white/70">
+                                            📍 {stripDemo(travel.address)}
+                                          </div>
                                         ) : null}
                                       </div>
 
                                       <div className="text-right">
                                         {travel.checkin ? (
-                                          <div className="text-xs text-white/70">🕒 {stripDemo(travel.checkin)}</div>
+                                          <div className="text-xs text-white/70">
+                                            🕒 {stripDemo(travel.checkin)}
+                                          </div>
                                         ) : null}
                                         {travel.confirmation ? (
                                           <div className="mt-1 inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
@@ -773,9 +931,14 @@ export default function Home() {
                           {t.card.title === "Spend Analysis" && t.charts ? (
                             <div className="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2">
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">Top categories</div>
+                                <div className="mb-2 text-sm text-white/80">
+                                  Top categories
+                                </div>
                                 <div className="h-56 w-full">
-                                  <ResponsiveContainer width="100%" height="100%">
+                                  <ResponsiveContainer
+                                    width="100%"
+                                    height="100%"
+                                  >
                                     <PieChart>
                                       <Pie
                                         data={t.charts.pie ?? []}
@@ -788,7 +951,12 @@ export default function Home() {
                                         strokeWidth={1}
                                       >
                                         {(t.charts.pie ?? []).map((_, i) => (
-                                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                                          <Cell
+                                            key={i}
+                                            fill={
+                                              PIE_COLORS[i % PIE_COLORS.length]
+                                            }
+                                          />
                                         ))}
                                       </Pie>
                                       <Tooltip content={<DarkTooltip />} />
@@ -798,19 +966,31 @@ export default function Home() {
                               </div>
 
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">Spend trend</div>
+                                <div className="mb-2 text-sm text-white/80">
+                                  Spend trend
+                                </div>
                                 <div className="h-56 w-full">
-                                  <ResponsiveContainer width="100%" height="100%">
+                                  <ResponsiveContainer
+                                    width="100%"
+                                    height="100%"
+                                  >
                                     <LineChart data={t.charts.trend ?? []}>
-                                      <CartesianGrid stroke="rgba(255,255,255,0.10)" strokeDasharray="3 3" />
+                                      <CartesianGrid
+                                        stroke="rgba(255,255,255,0.10)"
+                                        strokeDasharray="3 3"
+                                      />
                                       <XAxis
                                         dataKey="day"
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
+                                        tick={{
+                                          fill: "rgba(255,255,255,0.70)",
+                                        }}
                                       />
                                       <YAxis
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
+                                        tick={{
+                                          fill: "rgba(255,255,255,0.70)",
+                                        }}
                                       />
                                       <Tooltip content={<DarkTooltip />} />
                                       <Line
@@ -818,7 +998,11 @@ export default function Home() {
                                         dataKey="value"
                                         stroke="#60a5fa"
                                         strokeWidth={3}
-                                        dot={{ r: 3, stroke: "#60a5fa", fill: "#0b1220" }}
+                                        dot={{
+                                          r: 3,
+                                          stroke: "#60a5fa",
+                                          fill: "#0b1220",
+                                        }}
                                         activeDot={{ r: 5 }}
                                       />
                                     </LineChart>
@@ -889,11 +1073,15 @@ export default function Home() {
                 </button>
               </form>
 
-              <div className="mt-2 text-xs text-white/45">Tip: Press Enter to send.</div>
+              <div className="mt-2 text-xs text-white/45">
+                Tip: Press Enter to send.
+              </div>
             </div>
           </div>
 
-          <div className="mt-6 text-xs text-white/35">{stripDemo("Demo-safe: no real banking actions occur.")}</div>
+          <div className="mt-6 text-xs text-white/35">
+            {stripDemo("Demo-safe: no real banking actions occur.")}
+          </div>
         </div>
       </div>
     </div>
