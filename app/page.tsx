@@ -70,6 +70,9 @@ type Turn = {
   card?: Card | null;
   charts?: ChartsPayload | null;
   trace?: AgentTraceStep[] | null;
+
+  // ✅ NEW: allow a turn to render an insights list in-chat
+  insightsList?: InsightItem[] | null;
 };
 
 type InsightItem = {
@@ -158,8 +161,7 @@ function DarkTooltip({ active, payload, label }: any) {
 
 function stagePill(stage: string) {
   const s = (stage || "").toLowerCase();
-  if (s.includes("plan"))
-    return "bg-blue-500/15 border-blue-400/20 text-blue-200";
+  if (s.includes("plan")) return "bg-blue-500/15 border-blue-400/20 text-blue-200";
   if (s.includes("deleg"))
     return "bg-emerald-500/15 border-emerald-400/20 text-emerald-200";
   if (s.includes("act"))
@@ -171,11 +173,6 @@ function isTravelCard(card?: Card | null) {
   return (card?.title || "").toLowerCase().trim() === "travel";
 }
 
-/**
- * Travel "eye-catcher":
- * - If the backend returns a Travel card body as plain text, we parse a few fields
- *   and render a colorful itinerary block above the raw <pre>.
- */
 function parseTravel(body?: string) {
   const text = (body || "").toString();
   const lines = text
@@ -189,29 +186,17 @@ function parseTravel(body?: string) {
     return ln.slice(prefix.length).trim();
   };
 
-  // Try to capture common fields from your new main.py Travel body
-  const destination = get("Destination:");
-  const dates = get("Dates:");
-  const flight = get("Flight:");
-  const depart = get("Depart:");
-  const ret = get("Return:");
-  const hotel = get("Hotel:");
-  const address = get("Address:");
-  const checkin = get("Check-in:");
-  const confirmation = get("Confirmation:");
-  const points = get("Travel points:");
-
   return {
-    destination,
-    dates,
-    flight,
-    depart,
-    ret,
-    hotel,
-    address,
-    checkin,
-    confirmation,
-    points,
+    destination: get("Destination:"),
+    dates: get("Dates:"),
+    flight: get("Flight:"),
+    depart: get("Depart:"),
+    ret: get("Return:"),
+    hotel: get("Hotel:"),
+    address: get("Address:"),
+    checkin: get("Check-in:"),
+    confirmation: get("Confirmation:"),
+    points: get("Travel points:"),
   };
 }
 
@@ -220,27 +205,25 @@ export default function Home() {
   const [userId] = useState("ramesh");
 
   const [turns, setTurns] = useState<Turn[]>([
-    { id: "t0", userText: "", assistantText: "Hi Ramesh — how can I help today?" },
-  ]);
+  {
+    id: "t0",
+    userText: "",
+    assistantText:
+      "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
+  },
+]);
 
-  // ✅ Agentic Trace collapsed by default: DO NOT auto-open on new turns
-  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>(
-    {}
-  );
 
+  const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>({});
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // ✅ Insights dropdown state
-  const [insightsOpen, setInsightsOpen] = useState(false);
+  // Insights state (still keep it for badge count)
   const [insights, setInsights] = useState<InsightItem[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
 
-  // ✅ Updated chip names:
-  // 1) "cd maturity alert" -> "manage cd"
-  // 2) "upcoming travel" -> "travel"
   const quickChips = useMemo(
     () => [
       "spend analysis",
@@ -259,12 +242,7 @@ export default function Home() {
   }, [turns.length, loading]);
 
   async function callOrchestrate(text: string) {
-    const payload = {
-      session_id: sessionId,
-      user_id: userId,
-      channel: "web",
-      text,
-    };
+    const payload = { session_id: sessionId, user_id: userId, channel: "web", text };
 
     const res = await fetch(`${API_BASE}/orchestrate`, {
       method: "POST",
@@ -280,12 +258,7 @@ export default function Home() {
   }
 
   async function callAction(action_name: string, params: any) {
-    const payload = {
-      session_id: sessionId,
-      user_id: userId,
-      action_name,
-      params: params ?? {},
-    };
+    const payload = { session_id: sessionId, user_id: userId, action_name, params: params ?? {} };
 
     const res = await fetch(`${API_BASE}/action`, {
       method: "POST",
@@ -302,17 +275,12 @@ export default function Home() {
 
   function extractAssistantText(data: OrchestrateResponse | ActionResponse) {
     const msgs = Array.isArray(data.messages) ? data.messages : [];
-    const first = msgs.find(
-      (m) => m?.role === "assistant" && (m.content ?? "").trim()
-    );
+    const first = msgs.find((m) => m?.role === "assistant" && (m.content ?? "").trim());
     if (first) return stripDemo(first.content.trim());
     return "No response.";
   }
 
-  function extractChartsIfAny(
-    data: OrchestrateResponse | ActionResponse,
-    card?: Card | null
-  ) {
+  function extractChartsIfAny(data: OrchestrateResponse | ActionResponse, card?: Card | null) {
     const charts = (data as any)?.debug?.charts as ChartsPayload | undefined;
     if (card?.title === "Spend Analysis" && charts) return charts;
     return null;
@@ -346,9 +314,7 @@ export default function Home() {
           stage: "Delegate",
           agent: stripDemo(at.delegate.agent || "Router"),
           tool: stripDemo(at.delegate.capability),
-          decision: at.delegate.capability
-            ? stripDemo(`Route to ${at.delegate.capability}`)
-            : undefined,
+          decision: at.delegate.capability ? stripDemo(`Route to ${at.delegate.capability}`) : undefined,
         });
       }
 
@@ -357,9 +323,7 @@ export default function Home() {
           stage: "Act",
           agent: "Executor",
           result: stripDemo(at.act.result),
-          reasoning: at.act.confidence
-            ? stripDemo(`Confidence: ${at.act.confidence}`)
-            : undefined,
+          reasoning: at.act.confidence ? stripDemo(`Confidence: ${at.act.confidence}`) : undefined,
         });
       }
 
@@ -393,36 +357,32 @@ export default function Home() {
       subtitle: stripDemo(card.subtitle),
       body: stripDemo(card.body),
       actions: Array.isArray(card.actions)
-        ? card.actions.map((a) => ({
-            ...a,
-            label: stripDemo(a.label),
-          }))
+        ? card.actions.map((a) => ({ ...a, label: stripDemo(a.label) }))
         : card.actions,
     };
   }
 
-  // ✅ Fetch insights list WITHOUT polluting the chat
   async function refreshInsights() {
     setInsightsLoading(true);
     try {
       const data = await callOrchestrate("insights");
       const list = ((data as any)?.debug?.insights ?? []) as InsightItem[];
       if (Array.isArray(list)) {
-        setInsights(
-          list
-            .filter(
-              (x) =>
-                x && typeof x.id === "string" && typeof x.title === "string"
-            )
-            .map((x) => ({
-              id: stripDemo(x.id),
-              title: stripDemo(x.title),
-              subtitle: stripDemo(x.subtitle),
-            }))
-        );
+        const cleaned = list
+          .filter((x) => x && typeof x.id === "string" && typeof x.title === "string")
+          .map((x) => ({
+            id: stripDemo(x.id),
+            title: stripDemo(x.title),
+            subtitle: stripDemo(x.subtitle),
+          }));
+        setInsights(cleaned);
+        return cleaned;
       }
+      setInsights([]);
+      return [];
     } catch {
       setInsights([]);
+      return [];
     } finally {
       setInsightsLoading(false);
     }
@@ -433,6 +393,44 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ NEW: show insights in-chat (no overlay)
+  async function showInsightsInChat() {
+    if (loading) return;
+    setLoading(true);
+
+    const turnId = `t-${Date.now()}-insights`;
+
+    // add placeholder assistant turn
+    setTurns((prev) => [
+      ...prev,
+      {
+        id: turnId,
+        userText: "",
+        assistantText: "Here are your latest insights.",
+        card: { title: "Insights", subtitle: "Tap an insight to view details", body: "" },
+        insightsList: [],
+      },
+    ]);
+
+    try {
+      const list = await refreshInsights();
+
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === turnId
+            ? {
+                ...t,
+                assistantText: "Here are your latest insights.",
+                insightsList: list,
+              }
+            : t
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function send(text?: string) {
     const tRaw = (text ?? input).trim();
     if (!tRaw || loading) return;
@@ -441,11 +439,7 @@ export default function Home() {
     setInput("");
 
     const turnId = `t-${Date.now()}`;
-
-    setTurns((prev) => [
-      ...prev,
-      { id: turnId, userText: stripDemo(tRaw), assistantText: "…" },
-    ]);
+    setTurns((prev) => [...prev, { id: turnId, userText: stripDemo(tRaw), assistantText: "…" }]);
 
     try {
       const data = await callOrchestrate(tRaw);
@@ -454,25 +448,12 @@ export default function Home() {
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) =>
-        prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
-        )
-      );
-
-      // ✅ do NOT auto-expand trace (collapsed by default)
-      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
+      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
     } catch (e: any) {
       setTurns((prev) =>
         prev.map((x) =>
           x.id === turnId
-            ? {
-                ...x,
-                assistantText: `UI error: ${String(e?.message ?? e)}`,
-                card: null,
-                charts: null,
-                trace: null,
-              }
+            ? { ...x, assistantText: `UI error: ${String(e?.message ?? e)}`, card: null, charts: null, trace: null }
             : x
         )
       );
@@ -493,39 +474,23 @@ export default function Home() {
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) =>
-        prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
-        )
-      );
-
-      // ✅ do NOT auto-expand trace (collapsed by default)
-      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
+      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
     } catch (e: any) {
       setTurns((prev) =>
-        prev.map((x) =>
-          x.id === turnId
-            ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` }
-            : x
-        )
+        prev.map((x) => (x.id === turnId ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` } : x))
       );
     } finally {
       setLoading(false);
     }
   }
 
-  // ✅ Open insight within app (no link-out)
   async function openInsight(insightId: string) {
     if (!insightId || loading) return;
 
-    setInsightsOpen(false);
     setLoading(true);
 
     const turnId = `t-${Date.now()}-insight`;
-    setTurns((prev) => [
-      ...prev,
-      { id: turnId, userText: "", assistantText: "…" },
-    ]);
+    setTurns((prev) => [...prev, { id: turnId, userText: "", assistantText: "…" }]);
 
     try {
       const data = await callAction("insight_view", { insight_id: insightId });
@@ -534,21 +499,10 @@ export default function Home() {
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
-      setTurns((prev) =>
-        prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
-        )
-      );
-
-      // ✅ do NOT auto-expand trace (collapsed by default)
-      // if (trace?.length) setExpandedTrace((m) => ({ ...m, [turnId]: true }));
+      setTurns((prev) => prev.map((x) => (x.id === turnId ? { ...x, assistantText, card, charts, trace } : x)));
     } catch (e: any) {
       setTurns((prev) =>
-        prev.map((x) =>
-          x.id === turnId
-            ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` }
-            : x
-        )
+        prev.map((x) => (x.id === turnId ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` } : x))
       );
     } finally {
       setLoading(false);
@@ -569,27 +523,16 @@ export default function Home() {
         <header className="mb-8 flex items-start justify-between gap-4">
           <div>
             <h1 className="text-6xl font-semibold tracking-tight">
-              <span className="drop-shadow-[0_16px_60px_rgba(0,0,0,0.6)]">
-                Compass
-              </span>
+              <span className="drop-shadow-[0_16px_60px_rgba(0,0,0,0.6)]">Compass</span>
             </h1>
-            <p className="mt-2 text-white/70">
-              {stripDemo("Your digital banking assistant (demo)")}
-            </p>
+            <p className="mt-2 text-white/70">{stripDemo("Your digital banking assistant (demo)")}</p>
           </div>
 
           <button
             className="rounded-full border border-white/12 bg-white/5 px-5 py-2 text-sm text-white/85 shadow-[0_20px_80px_rgba(0,0,0,0.35)] hover:bg-white/10"
             onClick={() => {
-              setTurns([
-                {
-                  id: "t0",
-                  userText: "",
-                  assistantText: "Hi Ramesh — how can I help today?",
-                },
-              ]);
+              setTurns([{ id: "t0", userText: "", assistantText: "Hi Ramesh — how can I help today?" }]);
               setExpandedTrace({});
-              setInsightsOpen(false);
               refreshInsights();
             }}
           >
@@ -608,78 +551,17 @@ export default function Home() {
               <div className="mb-6 flex items-center justify-between">
                 <div className="text-sm text-white/70">Compass</div>
 
-                {/* Insights button + count badge */}
-                <div className="relative">
-                  <button
-                    className="relative rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
-                    onClick={async () => {
-                      await refreshInsights();
-                      setInsightsOpen((v) => !v);
-                    }}
-                    disabled={loading}
-                  >
-                    Insights
-                    <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/85">
-                      {insightsCount}
-                    </span>
-                  </button>
-
-                  {insightsOpen ? (
-                    <div className="absolute right-0 z-20 mt-3 w-[360px] rounded-2xl border border-white/10 bg-black/55 p-3 shadow-[0_18px_80px_rgba(0,0,0,0.6)] backdrop-blur-xl">
-                      <div className="mb-2 flex items-center justify-between px-2">
-                        <div className="text-sm font-semibold text-white/90">
-                          Insights
-                        </div>
-                        <button
-                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/75 hover:bg-white/10"
-                          onClick={() => setInsightsOpen(false)}
-                        >
-                          Close
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        {insightsLoading ? (
-                          <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
-                            Loading…
-                          </div>
-                        ) : insights.length === 0 ? (
-                          <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
-                            No insights available.
-                          </div>
-                        ) : (
-                          insights.map((it) => (
-                            <div
-                              key={it.id}
-                              className="rounded-2xl border border-white/10 bg-white/5 p-3"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="text-sm font-semibold text-white/90">
-                                    {stripDemo(it.title)}
-                                  </div>
-                                  {it.subtitle ? (
-                                    <div className="mt-1 text-xs text-white/60">
-                                      {stripDemo(it.subtitle)}
-                                    </div>
-                                  ) : null}
-                                </div>
-
-                                <button
-                                  className="shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs text-white/85 hover:bg-white/15 disabled:opacity-50"
-                                  disabled={loading}
-                                  onClick={() => openInsight(it.id)}
-                                >
-                                  View
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
+                {/* ✅ Insights button now injects Insights into chat */}
+                <button
+                  className="relative rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
+                  onClick={showInsightsInChat}
+                  disabled={loading}
+                >
+                  Insights
+                  <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/85">
+                    {insightsCount}
+                  </span>
+                </button>
               </div>
 
               {/* Chat area */}
@@ -687,65 +569,38 @@ export default function Home() {
                 {turns.map((t) => {
                   const showUser = t.userText.trim().length > 0;
                   const traceOpen = !!expandedTrace[t.id];
-
-                  const travel = isTravelCard(t.card)
-                    ? parseTravel(t.card?.body)
-                    : null;
+                  const travel = isTravelCard(t.card) ? parseTravel(t.card?.body) : null;
 
                   return (
                     <div key={t.id} className="space-y-3">
-                      {/* user bubble */}
-                      {showUser && (
-                        <div
-                          className={clsx(
-                            "max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug",
-                            bubbleClass("user")
-                          )}
-                        >
+                      {showUser ? (
+                        <div className={clsx("max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug", bubbleClass("user"))}>
                           {stripDemo(t.userText)}
                         </div>
-                      )}
+                      ) : null}
 
-                      {/* assistant bubble */}
                       {t.assistantText ? (
-                        <div
-                          className={clsx(
-                            "max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug",
-                            bubbleClass("assistant")
-                          )}
-                        >
+                        <div className={clsx("max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug", bubbleClass("assistant"))}>
                           {stripDemo(t.assistantText)}
                         </div>
                       ) : null}
 
-                      {/* Agentic Trace (collapsed by default) */}
+                      {/* Agentic Trace */}
                       {t.trace && t.trace.length > 0 ? (
                         <div className="max-w-[92%]">
                           <button
-                            onClick={() =>
-                              setExpandedTrace((m) => ({
-                                ...m,
-                                [t.id]: !traceOpen,
-                              }))
-                            }
+                            onClick={() => setExpandedTrace((m) => ({ ...m, [t.id]: !traceOpen }))}
                             className="rounded-xl border border-white/10 bg-white/6 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
                           >
-                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner →
-                            Delegate → Act)
+                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner → Delegate → Act)
                           </button>
 
                           {traceOpen ? (
                             <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
-                              <div className="mb-3 text-xs text-white/60">
-                                Trace
-                              </div>
-
+                              <div className="mb-3 text-xs text-white/60">Trace</div>
                               <div className="space-y-3">
                                 {t.trace.map((step, idx) => (
-                                  <div
-                                    key={idx}
-                                    className="rounded-xl border border-white/10 bg-black/35 p-3"
-                                  >
+                                  <div key={idx} className="rounded-xl border border-white/10 bg-black/35 p-3">
                                     <div className="flex flex-wrap items-center gap-2">
                                       <span
                                         className={clsx(
@@ -758,47 +613,32 @@ export default function Home() {
 
                                       {step.agent ? (
                                         <span className="text-[11px] text-white/70">
-                                          Agent:{" "}
-                                          <span className="text-white/90">
-                                            {stripDemo(step.agent)}
-                                          </span>
+                                          Agent: <span className="text-white/90">{stripDemo(step.agent)}</span>
                                         </span>
                                       ) : null}
 
                                       {step.tool ? (
                                         <span className="text-[11px] text-white/70">
-                                          Capability:{" "}
-                                          <span className="text-white/90">
-                                            {stripDemo(step.tool)}
-                                          </span>
+                                          Capability: <span className="text-white/90">{stripDemo(step.tool)}</span>
                                         </span>
                                       ) : null}
                                     </div>
 
                                     {step.reasoning ? (
                                       <div className="mt-2 text-sm text-white/80">
-                                        <span className="text-white/55">
-                                          Why:
-                                        </span>{" "}
-                                        {stripDemo(step.reasoning)}
+                                        <span className="text-white/55">Why:</span> {stripDemo(step.reasoning)}
                                       </div>
                                     ) : null}
 
                                     {step.decision ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">
-                                          Decision:
-                                        </span>{" "}
-                                        {stripDemo(step.decision)}
+                                        <span className="text-white/55">Decision:</span> {stripDemo(step.decision)}
                                       </div>
                                     ) : null}
 
                                     {step.result ? (
                                       <div className="mt-1 text-sm text-white/80">
-                                        <span className="text-white/55">
-                                          Result:
-                                        </span>{" "}
-                                        {stripDemo(step.result)}
+                                        <span className="text-white/55">Result:</span> {stripDemo(step.result)}
                                       </div>
                                     ) : null}
                                   </div>
@@ -814,18 +654,39 @@ export default function Home() {
                         <div className="mt-2 rounded-2xl border border-white/10 bg-black/35 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
                           <div className="flex items-start justify-between gap-4">
                             <div>
-                              <div className="text-lg font-semibold text-white/95">
-                                {stripDemo(t.card.title)}
-                              </div>
+                              <div className="text-lg font-semibold text-white/95">{stripDemo(t.card.title)}</div>
                               {t.card.subtitle ? (
-                                <div className="mt-1 text-sm text-white/65">
-                                  {stripDemo(t.card.subtitle)}
-                                </div>
+                                <div className="mt-1 text-sm text-white/65">{stripDemo(t.card.subtitle)}</div>
                               ) : null}
                             </div>
                           </div>
 
-                          {/* ✅ Travel eye-catcher */}
+                          {/* ✅ INSIGHTS LIST RENDER (in-chat) */}
+                          {t.insightsList && t.insightsList.length > 0 ? (
+                            <div className="mt-4 space-y-2">
+                              {t.insightsList.map((it) => (
+                                <div key={it.id} className="rounded-2xl border border-white/10 bg-white/5 p-3">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <div className="text-sm font-semibold text-white/90">{stripDemo(it.title)}</div>
+                                      {it.subtitle ? (
+                                        <div className="mt-1 text-xs text-white/60">{stripDemo(it.subtitle)}</div>
+                                      ) : null}
+                                    </div>
+                                    <button
+                                      className="shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs text-white/85 hover:bg-white/15 disabled:opacity-50"
+                                      disabled={loading}
+                                      onClick={() => openInsight(it.id)}
+                                    >
+                                      View
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+
+                          {/* Travel eye-catcher */}
                           {travel ? (
                             <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/15 via-sky-500/10 to-fuchsia-500/10">
                               <div className="p-4">
@@ -850,62 +711,43 @@ export default function Home() {
 
                                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">
-                                      Destination
-                                    </div>
+                                    <div className="text-xs text-white/60">Destination</div>
                                     <div className="mt-1 text-base font-semibold text-white/90">
                                       {stripDemo(travel.destination || "—")}
                                     </div>
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Dates
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.dates || "—")}
-                                    </div>
+
+                                    <div className="mt-2 text-xs text-white/60">Dates</div>
+                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.dates || "—")}</div>
                                   </div>
 
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">
-                                      Flight
-                                    </div>
+                                    <div className="text-xs text-white/60">Flight</div>
                                     <div className="mt-1 text-sm font-semibold text-white/90">
                                       {stripDemo(travel.flight || "—")}
                                     </div>
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Depart
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.depart || "—")}
-                                    </div>
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Return
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.ret || "—")}
-                                    </div>
+
+                                    <div className="mt-2 text-xs text-white/60">Depart</div>
+                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.depart || "—")}</div>
+
+                                    <div className="mt-2 text-xs text-white/60">Return</div>
+                                    <div className="mt-1 text-sm text-white/85">{stripDemo(travel.ret || "—")}</div>
                                   </div>
 
                                   <div className="rounded-2xl border border-white/10 bg-black/25 p-4 md:col-span-2">
                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                       <div>
-                                        <div className="text-xs text-white/60">
-                                          Hotel
-                                        </div>
+                                        <div className="text-xs text-white/60">Hotel</div>
                                         <div className="mt-1 text-sm font-semibold text-white/90">
                                           {stripDemo(travel.hotel || "—")}
                                         </div>
                                         {travel.address ? (
-                                          <div className="mt-1 text-xs text-white/70">
-                                            📍 {stripDemo(travel.address)}
-                                          </div>
+                                          <div className="mt-1 text-xs text-white/70">📍 {stripDemo(travel.address)}</div>
                                         ) : null}
                                       </div>
 
                                       <div className="text-right">
                                         {travel.checkin ? (
-                                          <div className="text-xs text-white/70">
-                                            🕒 {stripDemo(travel.checkin)}
-                                          </div>
+                                          <div className="text-xs text-white/70">🕒 {stripDemo(travel.checkin)}</div>
                                         ) : null}
                                         {travel.confirmation ? (
                                           <div className="mt-1 inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
@@ -916,29 +758,22 @@ export default function Home() {
                                     </div>
                                   </div>
                                 </div>
-
-                                <div className="mt-3 text-xs text-white/55">
-                                  
-                                </div>
                               </div>
                             </div>
                           ) : null}
-                          
-                          {/* Raw body — hide for Travel since we render a custom layout */}
-{t.card.body && !isTravelCard(t.card) ? (
-  <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
-    {stripDemo(t.card.body)}
-  </pre>
-) : null}
 
+                          {/* Raw body — hide for Travel */}
+                          {t.card.body && !isTravelCard(t.card) ? (
+                            <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
+                              {stripDemo(t.card.body)}
+                            </pre>
+                          ) : null}
 
                           {/* spend charts */}
                           {t.card.title === "Spend Analysis" && t.charts ? (
                             <div className="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2">
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">
-                                  Top categories
-                                </div>
+                                <div className="mb-2 text-sm text-white/80">Top categories</div>
                                 <div className="h-56 w-full">
                                   <ResponsiveContainer width="100%" height="100%">
                                     <PieChart>
@@ -953,10 +788,7 @@ export default function Home() {
                                         strokeWidth={1}
                                       >
                                         {(t.charts.pie ?? []).map((_, i) => (
-                                          <Cell
-                                            key={i}
-                                            fill={PIE_COLORS[i % PIE_COLORS.length]}
-                                          />
+                                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                         ))}
                                       </Pie>
                                       <Tooltip content={<DarkTooltip />} />
@@ -966,28 +798,19 @@ export default function Home() {
                               </div>
 
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">
-                                  Spend trend
-                                </div>
+                                <div className="mb-2 text-sm text-white/80">Spend trend</div>
                                 <div className="h-56 w-full">
                                   <ResponsiveContainer width="100%" height="100%">
                                     <LineChart data={t.charts.trend ?? []}>
-                                      <CartesianGrid
-                                        stroke="rgba(255,255,255,0.10)"
-                                        strokeDasharray="3 3"
-                                      />
+                                      <CartesianGrid stroke="rgba(255,255,255,0.10)" strokeDasharray="3 3" />
                                       <XAxis
                                         dataKey="day"
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{
-                                          fill: "rgba(255,255,255,0.70)",
-                                        }}
+                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
                                       />
                                       <YAxis
                                         stroke="rgba(255,255,255,0.45)"
-                                        tick={{
-                                          fill: "rgba(255,255,255,0.70)",
-                                        }}
+                                        tick={{ fill: "rgba(255,255,255,0.70)" }}
                                       />
                                       <Tooltip content={<DarkTooltip />} />
                                       <Line
@@ -995,11 +818,7 @@ export default function Home() {
                                         dataKey="value"
                                         stroke="#60a5fa"
                                         strokeWidth={3}
-                                        dot={{
-                                          r: 3,
-                                          stroke: "#60a5fa",
-                                          fill: "#0b1220",
-                                        }}
+                                        dot={{ r: 3, stroke: "#60a5fa", fill: "#0b1220" }}
                                         activeDot={{ r: 5 }}
                                       />
                                     </LineChart>
@@ -1070,15 +889,11 @@ export default function Home() {
                 </button>
               </form>
 
-              <div className="mt-2 text-xs text-white/45">
-                Tip: Press Enter to send.
-              </div>
+              <div className="mt-2 text-xs text-white/45">Tip: Press Enter to send.</div>
             </div>
           </div>
 
-          <div className="mt-6 text-xs text-white/35">
-            {stripDemo("Demo-safe: no real banking actions occur.")}
-          </div>
+          <div className="mt-6 text-xs text-white/35">{stripDemo("Demo-safe: no real banking actions occur.")}</div>
         </div>
       </div>
     </div>
