@@ -37,8 +37,67 @@ type Card = {
 };
 
 type ChartsPayload = {
-  pie?: { name: string; value: number }[];
+  pie?: { name: string; value: number; color?: string }[];
   trend?: { day: string; value: number }[];
+};
+
+type TravelFlight = {
+  from: string;
+  to: string;
+  depart: string;
+  arrive: string;
+};
+
+type TravelData = {
+  destination: string;
+  dates: string;
+  days_until: number;
+  status: string;
+  flight: {
+    airline: string;
+    number: string;
+    outbound: TravelFlight;
+    return: TravelFlight;
+  };
+  hotel: {
+    name: string;
+    address: string;
+    checkin: string;
+    checkout: string;
+    confirmation: string;
+  };
+  points: number;
+};
+
+type CDItem = {
+  label: string;
+  principal: number;
+  apy: number;
+  term_months: number;
+  elapsed_months: number;
+  days_to_maturity: number;
+  maturity_date: string;
+  early_withdrawal_penalty: string;
+  status: string;
+};
+
+type CDData = {
+  cds: CDItem[];
+  suggestion: string;
+};
+
+type SpendCategory = {
+  name: string;
+  value: number;
+  color: string;
+};
+
+type SpendData = {
+  total: number;
+  vs_last_month: string;
+  categories: SpendCategory[];
+  trend: { day: string; value: number }[];
+  suggestion: { text: string; severity: string };
 };
 
 type AgentTraceStep = {
@@ -82,6 +141,9 @@ type Turn = {
   charts?: ChartsPayload | null;
   trace?: AgentTraceStep[] | null;
   insightsList?: InsightItem[] | null;
+  travelData?: TravelData | null;
+  cdData?: CDData | null;
+  spendData?: SpendData | null;
   error?: boolean;
   errorRetryText?: string;
 };
@@ -199,33 +261,12 @@ function isTravelCard(card?: Card | null) {
   return (card?.title || "").toLowerCase().trim() === "travel";
 }
 
-function parseTravel(body?: string) {
-  const text = (body || "").toString();
-  const lines = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+function isCDCard(card?: Card | null) {
+  return (card?.title || "").toLowerCase().trim() === "manage cd";
+}
 
-  const get = (prefix: string) => {
-    const ln = lines.find((l) =>
-      l.toLowerCase().startsWith(prefix.toLowerCase())
-    );
-    if (!ln) return "";
-    return ln.slice(prefix.length).trim();
-  };
-
-  return {
-    destination: get("Destination:"),
-    dates: get("Dates:"),
-    flight: get("Flight:"),
-    depart: get("Depart:"),
-    ret: get("Return:"),
-    hotel: get("Hotel:"),
-    address: get("Address:"),
-    checkin: get("Check-in:"),
-    confirmation: get("Confirmation:"),
-    points: get("Travel points:"),
-  };
+function isSpendCard(card?: Card | null) {
+  return (card?.title || "").toLowerCase().trim() === "spend analysis";
 }
 
 function insightCategoryStyle(category?: string): { border: string; bg: string; accent: string; icon: string } {
@@ -353,6 +394,21 @@ export default function Home() {
     const charts = (data as any)?.debug?.charts as ChartsPayload | undefined;
     if (card?.title === "Spend Analysis" && charts) return charts;
     return null;
+  }
+
+  function extractTravelData(data: OrchestrateResponse | ActionResponse): TravelData | null {
+    const t = (data as any)?.debug?.travel as TravelData | undefined;
+    return t && t.destination ? t : null;
+  }
+
+  function extractCDData(data: OrchestrateResponse | ActionResponse): CDData | null {
+    const c = (data as any)?.debug?.cd as CDData | undefined;
+    return c && Array.isArray(c.cds) ? c : null;
+  }
+
+  function extractSpendData(data: OrchestrateResponse | ActionResponse): SpendData | null {
+    const s = (data as any)?.debug?.spend as SpendData | undefined;
+    return s && Array.isArray(s.categories) ? s : null;
   }
 
   function extractTraceIfAny(data: OrchestrateResponse | ActionResponse) {
@@ -493,10 +549,13 @@ export default function Home() {
       const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
+      const travelData = extractTravelData(data);
+      const cdData = extractCDData(data);
+      const spendData = extractSpendData(data);
 
       setTurns((prev) =>
         prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+          x.id === turnId ? { ...x, assistantText, card, charts, trace, travelData, cdData, spendData } : x
         )
       );
     } catch (e: any) {
@@ -536,10 +595,13 @@ export default function Home() {
       const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
+      const travelData = extractTravelData(data);
+      const cdData = extractCDData(data);
+      const spendData = extractSpendData(data);
 
       setTurns((prev) =>
         prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+          x.id === turnId ? { ...x, assistantText, card, charts, trace, travelData, cdData, spendData } : x
         )
       );
     } catch {
@@ -566,10 +628,13 @@ export default function Home() {
       const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
+      const travelData = extractTravelData(data);
+      const cdData = extractCDData(data);
+      const spendData = extractSpendData(data);
 
       setTurns((prev) =>
         prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+          x.id === turnId ? { ...x, assistantText, card, charts, trace, travelData, cdData, spendData } : x
         )
       );
     } catch (e: any) {
@@ -599,6 +664,9 @@ export default function Home() {
       const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
+      const travelData = extractTravelData(data);
+      const cdData = extractCDData(data);
+      const spendData = extractSpendData(data);
 
       let assistantText = extractAssistantText(data);
       if (shouldHideInsightAck(assistantText, card)) {
@@ -607,7 +675,7 @@ export default function Home() {
 
       setTurns((prev) =>
         prev.map((x) =>
-          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+          x.id === turnId ? { ...x, assistantText, card, charts, trace, travelData, cdData, spendData } : x
         )
       );
     } catch (e: any) {
@@ -699,9 +767,10 @@ export default function Home() {
                 {turns.map((t) => {
                   const showUser = t.userText.trim().length > 0;
                   const traceOpen = !!expandedTrace[t.id];
-                  const travel = isTravelCard(t.card)
-                    ? parseTravel(t.card?.body)
-                    : null;
+                  const isTravel = isTravelCard(t.card);
+                  const isCD = isCDCard(t.card);
+                  const isSpend = isSpendCard(t.card);
+                  const hasStructuredCard = isTravel || isCD || isSpend;
 
                   return (
                     <div key={t.id} className="space-y-3">
@@ -896,141 +965,254 @@ export default function Home() {
                             </div>
                           ) : null}
 
-                          {/* Travel card */}
-                          {travel ? (
-                            <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#0060F0]/15 via-sky-500/10 to-[#0060F0]/5">
-                              <div className="p-4">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="flex items-center gap-2">
-                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      Flight
-                                    </span>
-                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      Hotel
-                                    </span>
-                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      Trip
-                                    </span>
-                                  </div>
-                                  {travel.points ? (
-                                    <span className="inline-flex items-center rounded-full bg-[#0060F0]/20 px-3 py-1 text-xs text-[#60a5fa]">
-                                      {travel.points} pts
-                                    </span>
-                                  ) : null}
-                                </div>
-
-                                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">
-                                      Destination
+                          {/* ---- Travel card (structured) ---- */}
+                          {isTravel && t.travelData ? (() => {
+                            const tv = t.travelData;
+                            return (
+                              <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#0060F0]/15 via-sky-500/10 to-[#0060F0]/5">
+                                <div className="p-4">
+                                  {/* Top row: status + countdown + points */}
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2">
+                                      {tv.status === "confirmed" ? (
+                                        <span className="inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-500/15 px-3 py-1 text-xs text-emerald-300">
+                                          Confirmed
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-500/15 px-3 py-1 text-xs text-amber-300">
+                                          {tv.status}
+                                        </span>
+                                      )}
+                                      <span className="text-xs text-white/60">
+                                        {tv.days_until} days away
+                                      </span>
                                     </div>
-                                    <div className="mt-1 text-base font-semibold text-white/90">
-                                      {travel.destination || "—"}
-                                    </div>
-
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Dates
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {travel.dates || "—"}
-                                    </div>
+                                    {tv.points ? (
+                                      <span className="inline-flex items-center rounded-full bg-[#0060F0]/20 px-3 py-1 text-xs text-[#60a5fa]">
+                                        {tv.points.toLocaleString()} pts
+                                      </span>
+                                    ) : null}
                                   </div>
 
-                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-                                    <div className="text-xs text-white/60">
-                                      Flight
-                                    </div>
-                                    <div className="mt-1 text-sm font-semibold text-white/90">
-                                      {travel.flight || "—"}
+                                  {/* Destination hero */}
+                                  <div className="mt-4">
+                                    <div className="text-2xl font-bold text-white/95">{tv.destination}</div>
+                                    <div className="mt-1 text-sm text-white/60">{tv.dates}</div>
+                                  </div>
+
+                                  {/* Flight itinerary */}
+                                  <div className="mt-4 rounded-2xl border border-white/10 bg-black/25 p-4">
+                                    <div className="flex items-center gap-2 text-xs text-white/50 mb-3">
+                                      <span className="font-medium text-white/70">Flight</span>
+                                      <span>{tv.flight.airline} {tv.flight.number}</span>
                                     </div>
 
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Depart
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {travel.depart || "—"}
+                                    {/* Outbound */}
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <div className="text-lg font-bold text-white/90">{tv.flight.outbound.from}</div>
+                                        <div className="text-xs text-white/50">{tv.flight.outbound.depart}</div>
+                                      </div>
+                                      <div className="flex-1 flex items-center gap-1">
+                                        <div className="h-px flex-1 bg-white/20" />
+                                        <span className="text-[10px] text-white/40 px-1">Outbound</span>
+                                        <div className="h-px flex-1 bg-white/20" />
+                                      </div>
+                                      <div>
+                                        <div className="text-lg font-bold text-white/90">{tv.flight.outbound.to}</div>
+                                        <div className="text-xs text-white/50">{tv.flight.outbound.arrive}</div>
+                                      </div>
                                     </div>
 
-                                    <div className="mt-2 text-xs text-white/60">
-                                      Return
-                                    </div>
-                                    <div className="mt-1 text-sm text-white/85">
-                                      {travel.ret || "—"}
+                                    <div className="my-2 border-t border-dashed border-white/10" />
+
+                                    {/* Return */}
+                                    <div className="flex items-center gap-3">
+                                      <div className="text-right">
+                                        <div className="text-lg font-bold text-white/90">{tv.flight.return.from}</div>
+                                        <div className="text-xs text-white/50">{tv.flight.return.depart}</div>
+                                      </div>
+                                      <div className="flex-1 flex items-center gap-1">
+                                        <div className="h-px flex-1 bg-white/20" />
+                                        <span className="text-[10px] text-white/40 px-1">Return</span>
+                                        <div className="h-px flex-1 bg-white/20" />
+                                      </div>
+                                      <div>
+                                        <div className="text-lg font-bold text-white/90">{tv.flight.return.to}</div>
+                                        <div className="text-xs text-white/50">{tv.flight.return.arrive}</div>
+                                      </div>
                                     </div>
                                   </div>
 
-                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4 md:col-span-2">
+                                  {/* Hotel */}
+                                  <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-4">
                                     <div className="flex flex-wrap items-start justify-between gap-3">
                                       <div>
-                                        <div className="text-xs text-white/60">
-                                          Hotel
-                                        </div>
-                                        <div className="mt-1 text-sm font-semibold text-white/90">
-                                          {travel.hotel || "—"}
-                                        </div>
-                                        {travel.address ? (
-                                          <div className="mt-1 text-xs text-white/70">
-                                            {travel.address}
-                                          </div>
-                                        ) : null}
+                                        <div className="text-xs text-white/50 mb-1">Hotel</div>
+                                        <div className="text-sm font-semibold text-white/90">{tv.hotel.name}</div>
+                                        <div className="mt-1 text-xs text-white/50">{tv.hotel.address}</div>
                                       </div>
-
                                       <div className="text-right">
-                                        {travel.checkin ? (
-                                          <div className="text-xs text-white/70">
-                                            {travel.checkin}
-                                          </div>
-                                        ) : null}
-                                        {travel.confirmation ? (
-                                          <div className="mt-1 inline-flex items-center rounded-full bg-emerald-500/15 border border-emerald-400/20 px-3 py-1 text-xs text-emerald-300">
-                                            Confirmed: {travel.confirmation}
-                                          </div>
-                                        ) : null}
+                                        <div className="text-xs text-white/50">
+                                          Check-in {tv.hotel.checkin} / Check-out {tv.hotel.checkout}
+                                        </div>
+                                        <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-500/15 px-3 py-1 text-xs text-emerald-300">
+                                          {tv.hotel.confirmation}
+                                        </div>
                                       </div>
                                     </div>
                                   </div>
                                 </div>
                               </div>
-                            </div>
-                          ) : null}
+                            );
+                          })() : null}
 
-                          {/* Card body (non-travel) */}
-                          {t.card.body && !isTravelCard(t.card) ? (
+                          {/* ---- CD card (structured) ---- */}
+                          {isCD && t.cdData ? (() => {
+                            const cd = t.cdData;
+                            return (
+                              <div className="mt-4 space-y-3">
+                                {cd.cds.map((c, ci) => {
+                                  const progress = Math.round((c.elapsed_months / c.term_months) * 100);
+                                  return (
+                                    <div key={ci} className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-sm font-semibold text-white/90">{c.label}</span>
+                                          <span className="inline-flex items-center rounded-full border border-emerald-400/20 bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">
+                                            Active
+                                          </span>
+                                        </div>
+                                        <div className="text-right">
+                                          <div className="text-2xl font-bold text-[#60a5fa]">{c.apy}%</div>
+                                          <div className="text-[10px] text-white/40">APY</div>
+                                        </div>
+                                      </div>
+
+                                      <div className="mt-3 grid grid-cols-3 gap-3">
+                                        <div>
+                                          <div className="text-[10px] text-white/40">Principal</div>
+                                          <div className="text-sm font-medium text-white/85">${c.principal.toLocaleString()}</div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[10px] text-white/40">Maturity</div>
+                                          <div className="text-sm font-medium text-white/85">{c.maturity_date}</div>
+                                        </div>
+                                        <div>
+                                          <div className="text-[10px] text-white/40">Early withdrawal</div>
+                                          <div className="text-sm font-medium text-white/85">{c.early_withdrawal_penalty}</div>
+                                        </div>
+                                      </div>
+
+                                      {/* Term progress bar */}
+                                      <div className="mt-3">
+                                        <div className="flex items-center justify-between text-[10px] text-white/40 mb-1">
+                                          <span>Term progress</span>
+                                          <span>{c.days_to_maturity} days remaining</span>
+                                        </div>
+                                        <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                          <div
+                                            className="h-full rounded-full bg-[#0060F0]"
+                                            style={{ width: `${progress}%` }}
+                                          />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+
+                                {/* Suggestion callout */}
+                                {cd.suggestion ? (
+                                  <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+                                    {cd.suggestion}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })() : null}
+
+                          {/* ---- Spend Analysis card (structured) ---- */}
+                          {isSpend && t.spendData ? (() => {
+                            const sp = t.spendData;
+                            const maxVal = Math.max(...sp.categories.map((c) => c.value));
+                            return (
+                              <div className="mt-4">
+                                {/* Total headline */}
+                                <div className="flex items-baseline gap-3 mb-4">
+                                  <span className="text-3xl font-bold text-white/95">${sp.total.toLocaleString()}</span>
+                                  <span className="rounded-full bg-amber-500/15 border border-amber-400/20 px-2.5 py-0.5 text-xs text-amber-300">{sp.vs_last_month} vs last month</span>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                  {/* Horizontal bar chart */}
+                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                    <div className="mb-3 text-sm text-white/70">Top categories</div>
+                                    <div className="space-y-3">
+                                      {sp.categories.map((cat) => (
+                                        <div key={cat.name}>
+                                          <div className="flex items-center justify-between mb-1">
+                                            <div className="flex items-center gap-2">
+                                              <span className="h-2.5 w-2.5 rounded-full" style={{ background: cat.color }} />
+                                              <span className="text-sm text-white/80">{cat.name}</span>
+                                            </div>
+                                            <span className="text-sm font-medium text-white/90">${cat.value}</span>
+                                          </div>
+                                          <div className="h-2 rounded-full bg-white/8 overflow-hidden">
+                                            <div
+                                              className="h-full rounded-full transition-all"
+                                              style={{ width: `${(cat.value / maxVal) * 100}%`, background: cat.color }}
+                                            />
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {/* Spend trend line chart */}
+                                  <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                    <div className="mb-3 text-sm text-white/70">Spend trend</div>
+                                    <div className="h-48 w-full">
+                                      <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={sp.trend}>
+                                          <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                                          <XAxis dataKey="day" stroke="rgba(255,255,255,0.35)" tick={{ fill: "rgba(255,255,255,0.60)", fontSize: 11 }} />
+                                          <YAxis stroke="rgba(255,255,255,0.35)" tick={{ fill: "rgba(255,255,255,0.60)", fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} />
+                                          <Tooltip content={<DarkTooltip />} />
+                                          <Line type="monotone" dataKey="value" stroke="#0060F0" strokeWidth={3} dot={{ r: 3, stroke: "#0060F0", fill: "#0b1220" }} activeDot={{ r: 5 }} />
+                                        </LineChart>
+                                      </ResponsiveContainer>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Suggestion callout */}
+                                {sp.suggestion ? (
+                                  <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200/90">
+                                    {sp.suggestion.text}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })() : null}
+
+                          {/* Card body (generic — only for cards without structured renderers) */}
+                          {t.card.body && !hasStructuredCard ? (
                             <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
                               {t.card.body}
                             </pre>
                           ) : null}
 
-                          {/* Spend charts */}
-                          {t.card.title === "Spend Analysis" && t.charts ? (
+                          {/* Spend charts fallback (when no structured spend data) */}
+                          {isSpend && !t.spendData && t.charts ? (
                             <div className="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2">
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">
-                                  Top categories
-                                </div>
+                                <div className="mb-2 text-sm text-white/80">Top categories</div>
                                 <div className="h-56 w-full">
-                                  <ResponsiveContainer
-                                    width="100%"
-                                    height="100%"
-                                  >
+                                  <ResponsiveContainer width="100%" height="100%">
                                     <PieChart>
-                                      <Pie
-                                        data={t.charts.pie ?? []}
-                                        dataKey="value"
-                                        nameKey="name"
-                                        outerRadius={85}
-                                        innerRadius={40}
-                                        paddingAngle={2}
-                                        stroke="rgba(255,255,255,0.10)"
-                                        strokeWidth={1}
-                                      >
+                                      <Pie data={t.charts.pie ?? []} dataKey="value" nameKey="name" outerRadius={85} innerRadius={40} paddingAngle={2} stroke="rgba(255,255,255,0.10)" strokeWidth={1}>
                                         {(t.charts.pie ?? []).map((_, i) => (
-                                          <Cell
-                                            key={i}
-                                            fill={
-                                              PIE_COLORS[i % PIE_COLORS.length]
-                                            }
-                                          />
+                                          <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
                                         ))}
                                       </Pie>
                                       <Tooltip content={<DarkTooltip />} />
@@ -1038,47 +1220,16 @@ export default function Home() {
                                   </ResponsiveContainer>
                                 </div>
                               </div>
-
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
-                                <div className="mb-2 text-sm text-white/80">
-                                  Spend trend
-                                </div>
+                                <div className="mb-2 text-sm text-white/80">Spend trend</div>
                                 <div className="h-56 w-full">
-                                  <ResponsiveContainer
-                                    width="100%"
-                                    height="100%"
-                                  >
+                                  <ResponsiveContainer width="100%" height="100%">
                                     <LineChart data={t.charts.trend ?? []}>
-                                      <CartesianGrid
-                                        stroke="rgba(255,255,255,0.10)"
-                                        strokeDasharray="3 3"
-                                      />
-                                      <XAxis
-                                        dataKey="day"
-                                        stroke="rgba(255,255,255,0.45)"
-                                        tick={{
-                                          fill: "rgba(255,255,255,0.70)",
-                                        }}
-                                      />
-                                      <YAxis
-                                        stroke="rgba(255,255,255,0.45)"
-                                        tick={{
-                                          fill: "rgba(255,255,255,0.70)",
-                                        }}
-                                      />
+                                      <CartesianGrid stroke="rgba(255,255,255,0.10)" strokeDasharray="3 3" />
+                                      <XAxis dataKey="day" stroke="rgba(255,255,255,0.45)" tick={{ fill: "rgba(255,255,255,0.70)" }} />
+                                      <YAxis stroke="rgba(255,255,255,0.45)" tick={{ fill: "rgba(255,255,255,0.70)" }} />
                                       <Tooltip content={<DarkTooltip />} />
-                                      <Line
-                                        type="monotone"
-                                        dataKey="value"
-                                        stroke="#0060F0"
-                                        strokeWidth={3}
-                                        dot={{
-                                          r: 3,
-                                          stroke: "#0060F0",
-                                          fill: "#0b1220",
-                                        }}
-                                        activeDot={{ r: 5 }}
-                                      />
+                                      <Line type="monotone" dataKey="value" stroke="#0060F0" strokeWidth={3} dot={{ r: 3, stroke: "#0060F0", fill: "#0b1220" }} activeDot={{ r: 5 }} />
                                     </LineChart>
                                   </ResponsiveContainer>
                                 </div>
