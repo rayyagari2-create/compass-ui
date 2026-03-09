@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   ResponsiveContainer,
   PieChart,
@@ -14,12 +14,13 @@ import {
   CartesianGrid,
 } from "recharts";
 
+/* ------------------------------------------------------------------ */
+/* Types                                                               */
+/* ------------------------------------------------------------------ */
+
 type Role = "user" | "assistant";
 
-type ChatMessage = {
-  role: Role;
-  content: string;
-};
+type ChatMessage = { role: Role; content: string };
 
 type CardAction = {
   id?: string;
@@ -76,13 +77,22 @@ type Turn = {
   card?: Card | null;
   charts?: ChartsPayload | null;
   trace?: AgentTraceStep[] | null;
-
-  // ✅ allow a turn to render an insights list in-chat
   insightsList?: InsightItem[] | null;
+  error?: boolean;
+  errorRetryText?: string;
 };
+
+/* ------------------------------------------------------------------ */
+/* Constants & helpers                                                  */
+/* ------------------------------------------------------------------ */
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE?.trim() || "http://127.0.0.1:8000";
+
+// Chase-inspired palette
+const CHASE_BLUE = "#0060F0";
+const CHASE_BLUE_HOVER = "#0050D0";
+const CHASE_NAVY = "#0A1628";
 
 function clsx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -90,7 +100,7 @@ function clsx(...xs: Array<string | false | null | undefined>) {
 
 function bubbleClass(role: Role) {
   if (role === "user") {
-    return "ml-auto bg-blue-600/90 border border-blue-300/15 text-white shadow-[0_8px_24px_rgba(37,99,235,0.25)]";
+    return "ml-auto bg-[#0060F0]/90 border border-[#0060F0]/30 text-white shadow-[0_8px_24px_rgba(0,96,240,0.25)]";
   }
   return "mr-auto bg-white/8 border border-white/10 text-white/90 shadow-[0_10px_30px_rgba(0,0,0,0.35)]";
 }
@@ -104,18 +114,16 @@ const PIE_COLORS = [
   "#fb7185",
 ];
 
-function stripDemo(input: any): any {
-  if (input == null) return input;
-  if (typeof input === "string") {
-    return input
-      .replace(/\bdemo-safe\b/gi, "")
-      .replace(/\(demo\)/gi, "")
-      .replace(/\bdemo\b/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-  }
-  return input;
+function timeGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
 }
+
+/* ------------------------------------------------------------------ */
+/* Sub-components                                                      */
+/* ------------------------------------------------------------------ */
 
 function DarkTooltip({ active, payload, label }: any) {
   if (!active) return null;
@@ -155,6 +163,19 @@ function DarkTooltip({ active, payload, label }: any) {
             </span>
           </div>
         ))}
+    </div>
+  );
+}
+
+function TypingIndicator() {
+  return (
+    <div className="mr-auto flex items-center gap-2 rounded-2xl border border-white/10 bg-white/8 px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+      <span className="text-sm text-white/60">Compass is thinking</span>
+      <span className="flex gap-1">
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" style={{ animationDelay: "0ms" }} />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" style={{ animationDelay: "150ms" }} />
+        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-white/50" style={{ animationDelay: "300ms" }} />
+      </span>
     </div>
   );
 }
@@ -203,15 +224,17 @@ function parseTravel(body?: string) {
   };
 }
 
-// ✅ Hide “Opening X…” acknowledgements on insight clicks
 function shouldHideInsightAck(msg: string, card?: Card | null) {
   const t = (msg || "").toLowerCase().trim();
   if (t.startsWith("opening ")) return true;
   if (t === "opening.") return true;
-  // If backend returns an Insights card, don’t also show a generic bubble
   if ((card?.title || "").toLowerCase().trim() === "insights") return true;
   return false;
 }
+
+/* ------------------------------------------------------------------ */
+/* Main page component                                                 */
+/* ------------------------------------------------------------------ */
 
 export default function Home() {
   const [sessionId] = useState("demo-session");
@@ -221,22 +244,18 @@ export default function Home() {
     {
       id: "t0",
       userText: "",
-      assistantText:
-        "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
+      assistantText: `${timeGreeting()}, Ramesh. You have new insights available — tap Insights to review, or choose an option below.`,
     },
   ]);
 
-  // Trace collapsed by default
   const [expandedTrace, setExpandedTrace] = useState<Record<string, boolean>>(
     {}
   );
-
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Insights state (for badge + in-chat list)
   const [insights, setInsights] = useState<InsightItem[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
 
@@ -257,18 +276,18 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns.length, loading]);
 
-  async function callOrchestrate(text: string) {
-    const payload = {
-      session_id: sessionId,
-      user_id: userId,
-      channel: "web",
-      text,
-    };
+  /* ---- API helpers ---- */
 
+  async function callOrchestrate(text: string) {
     const res = await fetch(`${API_BASE}/orchestrate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        channel: "web",
+        text,
+      }),
     });
 
     if (!res.ok) {
@@ -279,17 +298,15 @@ export default function Home() {
   }
 
   async function callAction(action_name: string, params: any) {
-    const payload = {
-      session_id: sessionId,
-      user_id: userId,
-      action_name,
-      params: params ?? {},
-    };
-
     const res = await fetch(`${API_BASE}/action`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        session_id: sessionId,
+        user_id: userId,
+        action_name,
+        params: params ?? {},
+      }),
     });
 
     if (!res.ok) {
@@ -299,12 +316,14 @@ export default function Home() {
     return (await res.json()) as ActionResponse;
   }
 
+  /* ---- Extractors ---- */
+
   function extractAssistantText(data: OrchestrateResponse | ActionResponse) {
     const msgs = Array.isArray(data.messages) ? data.messages : [];
     const first = msgs.find(
       (m) => m?.role === "assistant" && (m.content ?? "").trim()
     );
-    if (first) return stripDemo(first.content.trim());
+    if (first) return first.content.trim();
     return "No response.";
   }
 
@@ -335,18 +354,18 @@ export default function Home() {
         steps.push({
           stage: "Planner",
           agent: "Planner",
-          reasoning: stripDemo(at.planner.reason),
-          decision: stripDemo(at.planner.decision),
+          reasoning: at.planner.reason,
+          decision: at.planner.decision,
         });
       }
 
       if (at.delegate) {
         steps.push({
           stage: "Delegate",
-          agent: stripDemo(at.delegate.agent || "Router"),
-          tool: stripDemo(at.delegate.capability),
+          agent: at.delegate.agent || "Router",
+          tool: at.delegate.capability,
           decision: at.delegate.capability
-            ? stripDemo(`Route to ${at.delegate.capability}`)
+            ? `Route to ${at.delegate.capability}`
             : undefined,
         });
       }
@@ -355,9 +374,9 @@ export default function Home() {
         steps.push({
           stage: "Act",
           agent: "Executor",
-          result: stripDemo(at.act.result),
+          result: at.act.result,
           reasoning: at.act.confidence
-            ? stripDemo(`Confidence: ${at.act.confidence}`)
+            ? `Confidence: ${at.act.confidence}`
             : undefined,
         });
       }
@@ -370,48 +389,23 @@ export default function Home() {
       ((data as any)?.trace as AgentTraceStep[] | undefined);
 
     if (Array.isArray(traceArray) && traceArray.length > 0) {
-      return traceArray.map((s) => ({
-        ...s,
-        stage: stripDemo(s.stage),
-        agent: stripDemo(s.agent),
-        tool: stripDemo(s.tool),
-        reasoning: stripDemo(s.reasoning),
-        decision: stripDemo(s.decision),
-        result: stripDemo(s.result),
-      }));
+      return traceArray;
     }
 
     return null;
   }
 
-  function sanitizeCard(card: Card | null): Card | null {
-    if (!card) return null;
-    return {
-      ...card,
-      title: stripDemo(card.title),
-      subtitle: stripDemo(card.subtitle),
-      body: stripDemo(card.body),
-      actions: Array.isArray(card.actions)
-        ? card.actions.map((a) => ({ ...a, label: stripDemo(a.label) }))
-        : card.actions,
-    };
-  }
+  /* ---- Insights ---- */
 
-  async function refreshInsights() {
+  const refreshInsights = useCallback(async () => {
     setInsightsLoading(true);
     try {
       const data = await callOrchestrate("insights");
       const list = ((data as any)?.debug?.insights ?? []) as InsightItem[];
       if (Array.isArray(list)) {
-        const cleaned = list
-          .filter(
-            (x) => x && typeof x.id === "string" && typeof x.title === "string"
-          )
-          .map((x) => ({
-            id: stripDemo(x.id),
-            title: stripDemo(x.title),
-            subtitle: stripDemo(x.subtitle),
-          }));
+        const cleaned = list.filter(
+          (x) => x && typeof x.id === "string" && typeof x.title === "string"
+        );
         setInsights(cleaned);
         return cleaned;
       }
@@ -423,14 +417,13 @@ export default function Home() {
     } finally {
       setInsightsLoading(false);
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, userId]);
 
   useEffect(() => {
     refreshInsights();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshInsights]);
 
-  // ✅ show insights in-chat (no overlay)
   async function showInsightsInChat() {
     if (loading) return;
     setLoading(true);
@@ -454,11 +447,7 @@ export default function Home() {
       setTurns((prev) =>
         prev.map((t) =>
           t.id === turnId
-            ? {
-                ...t,
-                assistantText: "Here are your latest insights.",
-                insightsList: list,
-              }
+            ? { ...t, assistantText: "Here are your latest insights.", insightsList: list }
             : t
         )
       );
@@ -466,6 +455,8 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  /* ---- Send / action ---- */
 
   async function send(text?: string) {
     const tRaw = (text ?? input).trim();
@@ -475,15 +466,12 @@ export default function Home() {
     setInput("");
 
     const turnId = `t-${Date.now()}`;
-    setTurns((prev) => [
-      ...prev,
-      { id: turnId, userText: stripDemo(tRaw), assistantText: "…" },
-    ]);
+    setTurns((prev) => [...prev, { id: turnId, userText: tRaw }]);
 
     try {
       const data = await callOrchestrate(tRaw);
       const assistantText = extractAssistantText(data);
-      const card = sanitizeCard(data.card ?? null);
+      const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
@@ -498,11 +486,48 @@ export default function Home() {
           x.id === turnId
             ? {
                 ...x,
-                assistantText: `UI error: ${String(e?.message ?? e)}`,
+                assistantText: "I'm having trouble connecting right now.",
+                error: true,
+                errorRetryText: tRaw,
                 card: null,
                 charts: null,
                 trace: null,
               }
+            : x
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function retryTurn(turnId: string, text: string) {
+    if (loading) return;
+    setLoading(true);
+
+    setTurns((prev) =>
+      prev.map((x) =>
+        x.id === turnId ? { ...x, assistantText: undefined, error: false, errorRetryText: undefined } : x
+      )
+    );
+
+    try {
+      const data = await callOrchestrate(text);
+      const assistantText = extractAssistantText(data);
+      const card = data.card ?? null;
+      const charts = extractChartsIfAny(data, card);
+      const trace = extractTraceIfAny(data);
+
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId ? { ...x, assistantText, card, charts, trace } : x
+        )
+      );
+    } catch {
+      setTurns((prev) =>
+        prev.map((x) =>
+          x.id === turnId
+            ? { ...x, assistantText: "Still unable to connect. Please try again.", error: true, errorRetryText: text }
             : x
         )
       );
@@ -519,7 +544,7 @@ export default function Home() {
     try {
       const data = await callAction(actionName, a.params);
       const assistantText = extractAssistantText(data);
-      const card = sanitizeCard(data.card ?? null);
+      const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
@@ -532,10 +557,7 @@ export default function Home() {
       setTurns((prev) =>
         prev.map((x) =>
           x.id === turnId
-            ? {
-                ...x,
-                assistantText: `Action error: ${String(e?.message ?? e)}`,
-              }
+            ? { ...x, assistantText: "Something went wrong with that action.", error: true }
             : x
         )
       );
@@ -550,15 +572,12 @@ export default function Home() {
     setLoading(true);
 
     const turnId = `t-${Date.now()}-insight`;
-    setTurns((prev) => [
-      ...prev,
-      { id: turnId, userText: "", assistantText: "…" },
-    ]);
+    setTurns((prev) => [...prev, { id: turnId, userText: "" }]);
 
     try {
       const data = await callAction("insight_view", { insight_id: insightId });
 
-      const card = sanitizeCard(data.card ?? null);
+      const card = data.card ?? null;
       const charts = extractChartsIfAny(data, card);
       const trace = extractTraceIfAny(data);
 
@@ -576,7 +595,7 @@ export default function Home() {
       setTurns((prev) =>
         prev.map((x) =>
           x.id === turnId
-            ? { ...x, assistantText: `Action error: ${String(e?.message ?? e)}` }
+            ? { ...x, assistantText: "Unable to load that insight right now." }
             : x
         )
       );
@@ -585,13 +604,17 @@ export default function Home() {
     }
   }
 
-  const insightsCount = insightsLoading ? "…" : String(insights.length);
+  const insightsCount = insightsLoading ? "..." : String(insights.length);
+
+  /* ---------------------------------------------------------------- */
+  /* Render                                                            */
+  /* ---------------------------------------------------------------- */
 
   return (
     <div className="min-h-screen text-white">
-      {/* Background */}
+      {/* Background — Chase navy with blue/indigo accents */}
       <div className="fixed inset-0 -z-10 bg-[#060a14]" />
-      <div className="fixed inset-0 -z-10 bg-[radial-gradient(1200px_600px_at_20%_0%,rgba(59,130,246,0.35),transparent_60%),radial-gradient(800px_500px_at_90%_20%,rgba(99,102,241,0.25),transparent_60%),radial-gradient(1000px_700px_at_50%_100%,rgba(16,185,129,0.18),transparent_55%)]" />
+      <div className="fixed inset-0 -z-10 bg-[radial-gradient(1200px_600px_at_20%_0%,rgba(0,96,240,0.30),transparent_60%),radial-gradient(800px_500px_at_90%_20%,rgba(0,60,180,0.20),transparent_60%),radial-gradient(1000px_700px_at_50%_100%,rgba(0,96,240,0.10),transparent_55%)]" />
       <div className="fixed inset-0 -z-10 bg-gradient-to-b from-black/0 via-black/10 to-black/40" />
 
       <div className="mx-auto max-w-6xl px-6 py-10">
@@ -603,8 +626,8 @@ export default function Home() {
                 Compass
               </span>
             </h1>
-            <p className="mt-2 text-white/70">
-              {stripDemo("Your digital banking assistant (demo)")}
+            <p className="mt-2 text-white/60 text-sm">
+              Intelligent banking assistant
             </p>
           </div>
 
@@ -615,19 +638,18 @@ export default function Home() {
                 {
                   id: "t0",
                   userText: "",
-                  assistantText:
-                    "Hi Ramesh — welcome back!! 👋\nYou have new insights available. Click Insights to review them, or choose an option below to get started.",
+                  assistantText: `${timeGreeting()}, Ramesh. You have new insights available — tap Insights to review, or choose an option below.`,
                 },
               ]);
               setExpandedTrace({});
               refreshInsights();
             }}
           >
-            Logout
+            Reset
           </button>
         </header>
 
-        {/* “Phone” frame */}
+        {/* Phone frame */}
         <div className="mx-auto w-full max-w-4xl">
           <div className="relative rounded-[36px] border border-white/10 bg-white/5 shadow-[0_30px_140px_rgba(0,0,0,0.65)] backdrop-blur-xl">
             {/* notch */}
@@ -636,16 +658,18 @@ export default function Home() {
             <div className="p-6 md:p-8">
               {/* top bar */}
               <div className="mb-6 flex items-center justify-between">
-                <div className="text-sm text-white/70">Compass</div>
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-[#0060F0]" />
+                  <span className="text-sm font-medium text-white/80">Compass</span>
+                </div>
 
-                {/* ✅ Insights button injects insights into chat */}
                 <button
                   className="relative rounded-full border border-white/12 bg-white/5 px-4 py-2 text-sm text-white/85 hover:bg-white/10 disabled:opacity-50"
                   onClick={showInsightsInChat}
                   disabled={loading}
                 >
                   Insights
-                  <span className="ml-2 inline-flex items-center justify-center rounded-full bg-white/10 px-2 py-0.5 text-xs text-white/85">
+                  <span className="ml-2 inline-flex items-center justify-center rounded-full bg-[#0060F0]/20 px-2 py-0.5 text-xs text-[#60a5fa]">
                     {insightsCount}
                   </span>
                 </button>
@@ -669,22 +693,37 @@ export default function Home() {
                             bubbleClass("user")
                           )}
                         >
-                          {stripDemo(t.userText)}
+                          {t.userText}
                         </div>
+                      ) : null}
+
+                      {/* Typing indicator when waiting */}
+                      {!t.assistantText && t.assistantText !== "" && !t.error ? (
+                        <TypingIndicator />
                       ) : null}
 
                       {t.assistantText ? (
                         <div
                           className={clsx(
                             "max-w-[85%] rounded-2xl px-4 py-3 text-[15px] leading-snug",
-                            bubbleClass("assistant")
+                            bubbleClass("assistant"),
+                            t.error && "border-red-500/30"
                           )}
                         >
-                          {stripDemo(t.assistantText)}
+                          {t.assistantText}
+                          {t.error && t.errorRetryText ? (
+                            <button
+                              className="ml-3 inline-flex items-center gap-1 rounded-lg bg-white/10 px-3 py-1 text-xs text-white/80 hover:bg-white/15"
+                              onClick={() => retryTurn(t.id, t.errorRetryText!)}
+                              disabled={loading}
+                            >
+                              Retry
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
 
-                      {/* Agentic Trace */}
+                      {/* Decision Pipeline (formerly Agentic Trace) */}
                       {t.trace && t.trace.length > 0 ? (
                         <div className="max-w-[92%]">
                           <button
@@ -696,14 +735,14 @@ export default function Home() {
                             }
                             className="rounded-xl border border-white/10 bg-white/6 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
                           >
-                            {traceOpen ? "Hide" : "Show"} Agentic Trace (Planner
-                            → Delegate → Act)
+                            {traceOpen ? "Hide" : "Show"} Decision Pipeline
                           </button>
 
                           {traceOpen ? (
                             <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-4">
-                              <div className="mb-3 text-xs text-white/60">
-                                Trace
+                              <div className="mb-3 flex items-center gap-2 text-xs text-white/60">
+                                <span>Orchestration Pipeline</span>
+                                <span className="text-white/30">Planner → Delegate → Act</span>
                               </div>
                               <div className="space-y-3">
                                 {t.trace.map((step, idx) => (
@@ -718,14 +757,14 @@ export default function Home() {
                                           stagePill(step.stage)
                                         )}
                                       >
-                                        {stripDemo(step.stage)}
+                                        {step.stage}
                                       </span>
 
                                       {step.agent ? (
                                         <span className="text-[11px] text-white/70">
                                           Agent:{" "}
                                           <span className="text-white/90">
-                                            {stripDemo(step.agent)}
+                                            {step.agent}
                                           </span>
                                         </span>
                                       ) : null}
@@ -734,7 +773,7 @@ export default function Home() {
                                         <span className="text-[11px] text-white/70">
                                           Capability:{" "}
                                           <span className="text-white/90">
-                                            {stripDemo(step.tool)}
+                                            {step.tool}
                                           </span>
                                         </span>
                                       ) : null}
@@ -745,7 +784,7 @@ export default function Home() {
                                         <span className="text-white/55">
                                           Why:
                                         </span>{" "}
-                                        {stripDemo(step.reasoning)}
+                                        {step.reasoning}
                                       </div>
                                     ) : null}
 
@@ -754,7 +793,7 @@ export default function Home() {
                                         <span className="text-white/55">
                                           Decision:
                                         </span>{" "}
-                                        {stripDemo(step.decision)}
+                                        {step.decision}
                                       </div>
                                     ) : null}
 
@@ -763,7 +802,7 @@ export default function Home() {
                                         <span className="text-white/55">
                                           Result:
                                         </span>{" "}
-                                        {stripDemo(step.result)}
+                                        {step.result}
                                       </div>
                                     ) : null}
                                   </div>
@@ -774,23 +813,23 @@ export default function Home() {
                         </div>
                       ) : null}
 
-                      {/* inline card */}
+                      {/* Card */}
                       {t.card ? (
                         <div className="mt-2 rounded-2xl border border-white/10 bg-black/35 p-5 shadow-[0_18px_60px_rgba(0,0,0,0.35)]">
                           <div className="flex items-start justify-between gap-4">
                             <div>
                               <div className="text-lg font-semibold text-white/95">
-                                {stripDemo(t.card.title)}
+                                {t.card.title}
                               </div>
                               {t.card.subtitle ? (
                                 <div className="mt-1 text-sm text-white/65">
-                                  {stripDemo(t.card.subtitle)}
+                                  {t.card.subtitle}
                                 </div>
                               ) : null}
                             </div>
                           </div>
 
-                          {/* ✅ INSIGHTS LIST RENDER (in-chat) */}
+                          {/* Insights list */}
                           {t.insightsList && t.insightsList.length > 0 ? (
                             <div className="mt-4 space-y-2">
                               {t.insightsList.map((it) => (
@@ -801,16 +840,16 @@ export default function Home() {
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
                                       <div className="text-sm font-semibold text-white/90">
-                                        {stripDemo(it.title)}
+                                        {it.title}
                                       </div>
                                       {it.subtitle ? (
                                         <div className="mt-1 text-xs text-white/60">
-                                          {stripDemo(it.subtitle)}
+                                          {it.subtitle}
                                         </div>
                                       ) : null}
                                     </div>
                                     <button
-                                      className="shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-xs text-white/85 hover:bg-white/15 disabled:opacity-50"
+                                      className="shrink-0 rounded-full border border-[#0060F0]/30 bg-[#0060F0]/15 px-4 py-2 text-xs text-[#60a5fa] hover:bg-[#0060F0]/25 disabled:opacity-50"
                                       disabled={loading}
                                       onClick={() => openInsight(it.id)}
                                     >
@@ -822,25 +861,25 @@ export default function Home() {
                             </div>
                           ) : null}
 
-                          {/* Travel eye-catcher */}
+                          {/* Travel card */}
                           {travel ? (
-                            <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-emerald-500/15 via-sky-500/10 to-fuchsia-500/10">
+                            <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-[#0060F0]/15 via-sky-500/10 to-[#0060F0]/5">
                               <div className="p-4">
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex items-center gap-2">
                                     <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      ✈️ Flight
+                                      Flight
                                     </span>
                                     <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      🏨 Hotel
+                                      Hotel
                                     </span>
                                     <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      🎉 Trip
+                                      Trip
                                     </span>
                                   </div>
                                   {travel.points ? (
-                                    <span className="inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                      ⭐ {stripDemo(travel.points)}
+                                    <span className="inline-flex items-center rounded-full bg-[#0060F0]/20 px-3 py-1 text-xs text-[#60a5fa]">
+                                      {travel.points} pts
                                     </span>
                                   ) : null}
                                 </div>
@@ -851,14 +890,14 @@ export default function Home() {
                                       Destination
                                     </div>
                                     <div className="mt-1 text-base font-semibold text-white/90">
-                                      {stripDemo(travel.destination || "—")}
+                                      {travel.destination || "—"}
                                     </div>
 
                                     <div className="mt-2 text-xs text-white/60">
                                       Dates
                                     </div>
                                     <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.dates || "—")}
+                                      {travel.dates || "—"}
                                     </div>
                                   </div>
 
@@ -867,21 +906,21 @@ export default function Home() {
                                       Flight
                                     </div>
                                     <div className="mt-1 text-sm font-semibold text-white/90">
-                                      {stripDemo(travel.flight || "—")}
+                                      {travel.flight || "—"}
                                     </div>
 
                                     <div className="mt-2 text-xs text-white/60">
                                       Depart
                                     </div>
                                     <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.depart || "—")}
+                                      {travel.depart || "—"}
                                     </div>
 
                                     <div className="mt-2 text-xs text-white/60">
                                       Return
                                     </div>
                                     <div className="mt-1 text-sm text-white/85">
-                                      {stripDemo(travel.ret || "—")}
+                                      {travel.ret || "—"}
                                     </div>
                                   </div>
 
@@ -892,11 +931,11 @@ export default function Home() {
                                           Hotel
                                         </div>
                                         <div className="mt-1 text-sm font-semibold text-white/90">
-                                          {stripDemo(travel.hotel || "—")}
+                                          {travel.hotel || "—"}
                                         </div>
                                         {travel.address ? (
                                           <div className="mt-1 text-xs text-white/70">
-                                            📍 {stripDemo(travel.address)}
+                                            {travel.address}
                                           </div>
                                         ) : null}
                                       </div>
@@ -904,12 +943,12 @@ export default function Home() {
                                       <div className="text-right">
                                         {travel.checkin ? (
                                           <div className="text-xs text-white/70">
-                                            🕒 {stripDemo(travel.checkin)}
+                                            {travel.checkin}
                                           </div>
                                         ) : null}
                                         {travel.confirmation ? (
-                                          <div className="mt-1 inline-flex items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/85">
-                                            ✅ {stripDemo(travel.confirmation)}
+                                          <div className="mt-1 inline-flex items-center rounded-full bg-emerald-500/15 border border-emerald-400/20 px-3 py-1 text-xs text-emerald-300">
+                                            Confirmed: {travel.confirmation}
                                           </div>
                                         ) : null}
                                       </div>
@@ -920,14 +959,14 @@ export default function Home() {
                             </div>
                           ) : null}
 
-                          {/* Raw body — hide for Travel */}
+                          {/* Card body (non-travel) */}
                           {t.card.body && !isTravelCard(t.card) ? (
                             <pre className="mt-4 whitespace-pre-wrap rounded-xl bg-white/6 p-4 text-sm text-white/85">
-                              {stripDemo(t.card.body)}
+                              {t.card.body}
                             </pre>
                           ) : null}
 
-                          {/* spend charts */}
+                          {/* Spend charts */}
                           {t.card.title === "Spend Analysis" && t.charts ? (
                             <div className="mt-5 grid grid-cols-1 gap-6 md:grid-cols-2">
                               <div className="rounded-2xl border border-white/10 bg-black/40 p-4">
@@ -996,11 +1035,11 @@ export default function Home() {
                                       <Line
                                         type="monotone"
                                         dataKey="value"
-                                        stroke="#60a5fa"
+                                        stroke="#0060F0"
                                         strokeWidth={3}
                                         dot={{
                                           r: 3,
-                                          stroke: "#60a5fa",
+                                          stroke: "#0060F0",
                                           fill: "#0b1220",
                                         }}
                                         activeDot={{ r: 5 }}
@@ -1012,7 +1051,7 @@ export default function Home() {
                             </div>
                           ) : null}
 
-                          {/* actions */}
+                          {/* Card actions */}
                           {t.card.actions && t.card.actions.length > 0 ? (
                             <div className="mt-4 flex flex-wrap gap-2">
                               {t.card.actions.map((a, i) => (
@@ -1022,7 +1061,7 @@ export default function Home() {
                                   onClick={() => onActionClick(t.id, a)}
                                   disabled={loading}
                                 >
-                                  {stripDemo(a.label)}
+                                  {a.label}
                                 </button>
                               ))}
                             </div>
@@ -1032,6 +1071,11 @@ export default function Home() {
                     </div>
                   );
                 })}
+
+                {/* Global typing indicator when loading with no pending turn */}
+                {loading && turns.length > 0 && turns[turns.length - 1].assistantText !== undefined ? (
+                  <TypingIndicator />
+                ) : null}
 
                 <div ref={bottomRef} />
               </div>
@@ -1045,7 +1089,7 @@ export default function Home() {
                     disabled={loading}
                     className="rounded-full border border-white/10 bg-white/6 px-4 py-2 text-sm text-white/80 hover:bg-white/10 disabled:opacity-50"
                   >
-                    {stripDemo(c)}
+                    {c}
                   </button>
                 ))}
               </div>
@@ -1061,26 +1105,22 @@ export default function Home() {
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Type or ask me something"
-                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-4 text-white outline-none placeholder:text-white/40 focus:border-blue-500/50"
+                  placeholder="Ask me anything..."
+                  className="w-full rounded-2xl border border-white/10 bg-black/35 px-4 py-4 text-white outline-none placeholder:text-white/40 focus:border-[#0060F0]/50"
                 />
                 <button
                   type="submit"
                   disabled={loading}
-                  className="rounded-2xl bg-blue-600 px-6 py-4 font-medium text-white shadow-[0_14px_50px_rgba(37,99,235,0.25)] hover:bg-blue-500 disabled:opacity-50"
+                  className="rounded-2xl bg-[#0060F0] px-6 py-4 font-medium text-white shadow-[0_14px_50px_rgba(0,96,240,0.25)] hover:bg-[#0050D0] disabled:opacity-50"
                 >
-                  {loading ? "…" : "Send"}
+                  {loading ? "..." : "Send"}
                 </button>
               </form>
 
-              <div className="mt-2 text-xs text-white/45">
-                Tip: Press Enter to send.
+              <div className="mt-2 text-xs text-white/35">
+                Press Enter to send
               </div>
             </div>
-          </div>
-
-          <div className="mt-6 text-xs text-white/35">
-            {stripDemo("Demo-safe: no real banking actions occur.")}
           </div>
         </div>
       </div>

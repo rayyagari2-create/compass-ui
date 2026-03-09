@@ -13,7 +13,6 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Already logged in → redirect home
     try {
       const raw = localStorage.getItem(AUTH_KEY);
       if (raw && JSON.parse(raw)?.loggedIn) {
@@ -32,7 +31,7 @@ export default function LoginPage() {
     }
 
     if (password !== DEMO_PASSWORD) {
-      setError("Invalid password (hint: demo123).");
+      setError("Invalid credentials.");
       return;
     }
 
@@ -51,9 +50,12 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-[#050712] text-white flex items-center justify-center px-6">
       <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-8 shadow-[0_30px_100px_rgba(0,0,0,0.75)] backdrop-blur-md">
-        <h1 className="text-3xl font-semibold tracking-tight">Compass</h1>
+        <div className="flex items-center gap-2 mb-1">
+          <div className="h-2.5 w-2.5 rounded-full bg-[#0060F0]" />
+          <h1 className="text-3xl font-semibold tracking-tight">Compass</h1>
+        </div>
         <p className="mt-2 text-sm text-zinc-400">
-          Secure demo login
+          Sign in to continue
         </p>
 
         <form onSubmit={handleLogin} className="mt-6 space-y-4">
@@ -62,8 +64,8 @@ export default function LoginPage() {
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-blue-500/60"
-              placeholder="ramesh"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-[#0060F0]/60"
+              placeholder="Enter username"
             />
           </div>
 
@@ -73,8 +75,8 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-blue-500/60"
-              placeholder="demo123"
+              className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-[#0060F0]/60"
+              placeholder="Enter password"
             />
           </div>
 
@@ -86,15 +88,11 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="mt-2 w-full rounded-xl bg-blue-600 py-3 font-medium hover:bg-blue-500"
+            className="mt-2 w-full rounded-xl bg-[#0060F0] py-3 font-medium hover:bg-[#0050D0]"
           >
             Sign in
           </button>
         </form>
-
-        <p className="mt-4 text-xs text-zinc-500">
-          Demo password: <span className="text-zinc-300">demo123</span>
-        </p>
       </div>
     </div>
   );
