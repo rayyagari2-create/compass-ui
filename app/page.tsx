@@ -68,6 +68,10 @@ type InsightItem = {
   id: string;
   title: string;
   subtitle?: string;
+  metric?: string;
+  category?: string;
+  priority?: string;
+  is_new?: boolean;
 };
 
 type Turn = {
@@ -222,6 +226,21 @@ function parseTravel(body?: string) {
     confirmation: get("Confirmation:"),
     points: get("Travel points:"),
   };
+}
+
+function insightCategoryStyle(category?: string): { border: string; bg: string; accent: string; icon: string } {
+  switch (category) {
+    case "spend":
+      return { border: "border-amber-400/25", bg: "bg-amber-500/10", accent: "text-amber-300", icon: "↗" };
+    case "assets":
+      return { border: "border-yellow-400/25", bg: "bg-yellow-500/10", accent: "text-yellow-300", icon: "⏱" };
+    case "travel":
+      return { border: "border-sky-400/25", bg: "bg-sky-500/10", accent: "text-sky-300", icon: "→" };
+    case "recurring":
+      return { border: "border-white/10", bg: "bg-white/5", accent: "text-white/70", icon: "↻" };
+    default:
+      return { border: "border-white/10", bg: "bg-white/5", accent: "text-white/70", icon: "•" };
+  }
 }
 
 function shouldHideInsightAck(msg: string, card?: Card | null) {
@@ -829,35 +848,51 @@ export default function Home() {
                             </div>
                           </div>
 
-                          {/* Insights list */}
+                          {/* Insights 2x2 grid */}
                           {t.insightsList && t.insightsList.length > 0 ? (
-                            <div className="mt-4 space-y-2">
-                              {t.insightsList.map((it) => (
-                                <div
-                                  key={it.id}
-                                  className="rounded-2xl border border-white/10 bg-white/5 p-3"
-                                >
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="text-sm font-semibold text-white/90">
-                                        {it.title}
-                                      </div>
-                                      {it.subtitle ? (
-                                        <div className="mt-1 text-xs text-white/60">
-                                          {it.subtitle}
-                                        </div>
-                                      ) : null}
+                            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                              {t.insightsList.map((it) => {
+                                const cs = insightCategoryStyle(it.category);
+                                return (
+                                  <button
+                                    key={it.id}
+                                    className={clsx(
+                                      "group relative rounded-2xl border p-4 text-left transition-colors hover:bg-white/8 disabled:opacity-50",
+                                      cs.border,
+                                      cs.bg,
+                                    )}
+                                    disabled={loading}
+                                    onClick={() => openInsight(it.id)}
+                                  >
+                                    {/* New badge */}
+                                    {it.is_new ? (
+                                      <span className="absolute right-3 top-3 rounded-full bg-[#0060F0] px-2 py-0.5 text-[10px] font-medium text-white">
+                                        New
+                                      </span>
+                                    ) : null}
+
+                                    {/* Icon + title */}
+                                    <div className="flex items-center gap-2">
+                                      <span className={clsx("text-base", cs.accent)}>{cs.icon}</span>
+                                      <span className="text-sm font-semibold text-white/90">{it.title}</span>
                                     </div>
-                                    <button
-                                      className="shrink-0 rounded-full border border-[#0060F0]/30 bg-[#0060F0]/15 px-4 py-2 text-xs text-[#60a5fa] hover:bg-[#0060F0]/25 disabled:opacity-50"
-                                      disabled={loading}
-                                      onClick={() => openInsight(it.id)}
-                                    >
-                                      View
-                                    </button>
-                                  </div>
-                                </div>
-                              ))}
+
+                                    {/* Metric callout */}
+                                    {it.metric ? (
+                                      <div className={clsx("mt-2 text-lg font-bold", cs.accent)}>
+                                        {it.metric}
+                                      </div>
+                                    ) : null}
+
+                                    {/* Subtitle */}
+                                    {it.subtitle ? (
+                                      <div className="mt-1 text-xs text-white/50">
+                                        {it.subtitle}
+                                      </div>
+                                    ) : null}
+                                  </button>
+                                );
+                              })}
                             </div>
                           ) : null}
 
